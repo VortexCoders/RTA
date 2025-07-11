@@ -341,6 +341,53 @@ body {
     100% { transform: rotate(360deg); }
 }
 
+/* Camera selection styles */
+#camera-selection-container {
+    background: rgba(255, 255, 255, 0.95);
+    backdrop-filter: blur(10px);
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 20px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+#camera-select {
+    font-size: 14px;
+    padding: 8px 12px;
+    border: 2px solid #ddd;
+    border-radius: 8px;
+    background: white;
+    transition: border-color 0.3s ease;
+}
+
+#camera-select:focus {
+    border-color: #667eea;
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+}
+
+#refresh-cameras-btn {
+    padding: 8px 12px;
+    border: 2px solid #ddd;
+    border-radius: 8px;
+    background: white;
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+#refresh-cameras-btn:hover {
+    background: #f8f9fa;
+    border-color: #667eea;
+}
+
+.camera-info {
+    font-size: 12px;
+    color: #666;
+    margin-top: 5px;
+    font-style: italic;
+}
+
 /* Responsive design */
 @media (max-width: 768px) {
     .container {
