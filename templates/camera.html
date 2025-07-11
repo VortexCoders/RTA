@@ -13,11 +13,12 @@
     <div id="status" class="alert alert-error">Ready to start streaming</div>
     
     <div class="video-container">
-        <video id="local-video" class="video-stream" autoplay muted>
+        <video id="local-video" class="video-stream" autoplay muted playsinline controls loop="false">
             <div class="video-placeholder">
                 <p>📷 Click "Start Streaming" to begin</p>
             </div>
         </video>
+        <div id="connection-status" class="alert alert-secondary">Waiting for stream...</div>
     </div>
     
     <div class="controls">

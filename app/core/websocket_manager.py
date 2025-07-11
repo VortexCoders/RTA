@@ -59,8 +59,8 @@ class ConnectionManager:
         if camera_token not in self.viewers:
             return
 
-        if is_binary:
-            await self.save_chunk(camera_token, data)
+        # if is_binary:
+        #     await self.save_chunk(camera_token, data)
 
         disconnected = []
 

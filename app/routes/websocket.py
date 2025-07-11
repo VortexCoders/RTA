@@ -29,9 +29,9 @@ async def camera_websocket(websocket: WebSocket, token: str, db: Session = Depen
             elif "bytes" in message and message["bytes"] is not None:
                 print(f"Received binary: {len(message['bytes'])} bytes from {token}")
                 messageBytes = message["bytes"]
-                frame = await run_yolo_on_webm(messageBytes)
-                # Send each JPEG frame as a separate WebSocket binary message
-                await manager.broadcast_to_viewers(token, frame, is_binary=True)
+                data = await run_yolo_on_webm(messageBytes)
+                # Send each  as a separate WebSocket binary message
+                await manager.broadcast_to_viewers(token, data, is_binary=True)
 
     except WebSocketDisconnect:
         pass
@@ -42,7 +42,7 @@ async def camera_websocket(websocket: WebSocket, token: str, db: Session = Depen
 async def viewer_websocket(websocket: WebSocket, token: str, db: Session = Depends(get_db)):
     camera = db.query(Camera).filter(Camera.camera_token == token).first()
     
-    
+
     if not camera:
         await websocket.close(code=4404)
         return
