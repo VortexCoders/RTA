@@ -68,13 +68,37 @@
 {% endblock %}
 
 {% block scripts %}
+<script src="/static/js/video-viewer.js"></script>
+<script src="/static/js/main.js"></script>
 <script>
 document.addEventListener('DOMContentLoaded', function() {
     const cameraToken = '{{ camera.camera_token }}';
     if (cameraToken) {
-        window.videoViewer = new VideoViewer(cameraToken);
+        window.videoViewer = new EnhancedVideoViewer(cameraToken);
         window.videoViewer.connect();
     }
 });
+
+function toggleDebugInfo() {
+    const debugDiv = document.getElementById('debug-info');
+    const debugContent = document.getElementById('debug-content');
+    
+    if (debugDiv.style.display === 'none') {
+        debugDiv.style.display = 'block';
+        // Update debug content
+        debugContent.innerHTML = `
+            <p>Camera Token: {{ camera.camera_token }}</p>
+            <p>Connection State: ${window.videoViewer ? window.videoViewer.ws?.readyState : 'Not initialized'}</p>
+            <p>Current Mode: ${window.videoViewer ? window.videoViewer.currentMode : 'Unknown'}</p>
+            <p>Reconnect Attempts: ${window.videoViewer ? window.videoViewer.reconnectAttempts : 0}</p>
+        `;
+    } else {
+        debugDiv.style.display = 'none';
+    }
+}
+
+function subscribeToPushNotifications(cameraId) {
+    enableNotifications(cameraId);
+}
 </script>
 {% endblock %}

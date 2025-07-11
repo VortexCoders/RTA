@@ -63,11 +63,12 @@
 {% endblock %}
 
 {% block scripts %}
+<script src="/static/js/video-streamer.js"></script>
 <script>
 document.addEventListener('DOMContentLoaded', function() {
     const token = '{{ camera.camera_token }}';
     if (token) {
-        window.cameraStreamer = new CameraStreamer(token);
+        window.cameraStreamer = new EnhancedVideoStreamer(token);
     }
 });
 </script>
