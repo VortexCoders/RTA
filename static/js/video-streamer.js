@@ -8,8 +8,6 @@ class EnhancedVideoStreamer {
         this.context = null;
         this.video = null;
         this.animationId = null;
-        this.targetFPS = 15;
-        this.frameInterval = 1000 / this.targetFPS;
         this.lastFrameTime = 0;
         this.frameCounter = 0;
         this.qualityFactor = 0.8; // JPEG quality
@@ -81,15 +79,9 @@ class EnhancedVideoStreamer {
             if (typeof event.data === 'string') {
                 try {
                     const msg = JSON.parse(event.data);
-                    if (msg.type === 'fps_adjustment') {
-                        this.targetFPS = msg.fps;
-                        this.frameInterval = 1000 / this.targetFPS;
-                        this.updateCameraInfo(); // Update UI
-                        console.log(`FPS adjusted to ${this.targetFPS}`);
-                    } else if (msg.type === 'adaptive_streaming') {
-                        if (msg.fps) {
-                            this.adjustFPS(msg.fps);
-                        }
+                    if (msg.type === 'performance_feedback') {
+                        // Log backend performance feedback
+                        console.log("Backend performance feedback:", msg);
                         if (msg.quality) {
                             this.adjustQuality(msg.quality);
                         }
@@ -106,12 +98,9 @@ class EnhancedVideoStreamer {
         const captureFrame = (currentTime) => {
             if (!this.isStreaming) return;
 
-            // Throttle to target FPS
-            if (currentTime - this.lastFrameTime >= this.frameInterval) {
-                this.captureAndSendFrame();
-                this.lastFrameTime = currentTime;
-                this.frameCounter++;
-            }
+            // 🚀 Send frames as fast as possible - no throttling!
+            this.captureAndSendFrame();
+            this.frameCounter++;
 
             this.animationId = requestAnimationFrame(captureFrame);
         };
@@ -205,19 +194,11 @@ class EnhancedVideoStreamer {
         statusEl.className = `alert alert-${type}`;
     }
 
-    // Dynamic quality adjustment based on connection
+    // Dynamic quality adjustment based on backend feedback
     adjustQuality(factor) {
         this.qualityFactor = Math.max(0.1, Math.min(1.0, factor));
         this.updateCameraInfo(); // Update UI
-        console.log(`Quality adjusted to ${this.qualityFactor}`);
-    }
-
-    // Dynamic FPS adjustment
-    adjustFPS(fps) {
-        this.targetFPS = Math.max(5, Math.min(60, fps));
-        this.frameInterval = 1000 / this.targetFPS;
-        this.updateCameraInfo(); // Update UI
-        console.log(`FPS adjusted to ${this.targetFPS}`);
+        console.log(`Quality adjusted to ${this.qualityFactor} based on backend feedback`);
     }
 
     async initializeCameraSelection() {
@@ -306,7 +287,7 @@ class EnhancedVideoStreamer {
                 <div class="col-12">
                     <small class="text-muted">
                         <span id="resolution-info"></span> • 
-                        <span id="fps-info">Target: ${this.targetFPS} FPS</span> • 
+                        <span id="fps-info">Unlimited FPS (Backend Controlled)</span> • 
                         <span id="quality-info">Quality: ${Math.round(this.qualityFactor * 100)}%</span>
                     </small>
                 </div>
@@ -397,7 +378,7 @@ class EnhancedVideoStreamer {
                 resolutionInfo.textContent = `${this.canvas.width}x${this.canvas.height}`;
             }
             if (fpsInfo) {
-                fpsInfo.textContent = `Target: ${this.targetFPS} FPS`;
+                fpsInfo.textContent = `Unlimited FPS (Backend Controlled)`;
             }
             if (qualityInfo) {
                 qualityInfo.textContent = `Quality: ${Math.round(this.qualityFactor * 100)}%`;

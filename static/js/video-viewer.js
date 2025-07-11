@@ -9,19 +9,22 @@ class EnhancedVideoViewer {
         this.sourceBuffer = null;
         this.frameQueue = [];
         this.isPlaying = false;
-        this.frameRate = 30;
-        this.frameInterval = 1000 / this.frameRate;
+        this.maxFrameRate = 60; // Increased from 30 for faster processing
+        this.frameInterval = 1000 / this.maxFrameRate;
         this.lastFrameTime = 0;
         this.frameCounter = 0;
         this.canvas = null;
         this.context = null;
         this.pendingMetadata = null;
         
-        // Performance monitoring
+        // Enhanced performance monitoring
         this.fpsCounter = 0;
         this.lastFpsTime = Date.now();
         this.latencySum = 0;
         this.latencyCount = 0;
+        this.maxQueueSize = 3; // Reduced to minimize latency
+        this.frameDrops = 0;
+        this.renderingFrame = false; // Prevent frame rendering overlap
     }
 
     connect() {
@@ -105,24 +108,36 @@ class EnhancedVideoViewer {
             const blob = new Blob([frameData], { type: `image/${metadata.format}` });
             const imageBitmap = await createImageBitmap(blob);
             
-            // Add to frame queue with metadata
-            this.frameQueue.push({
+            // 🚀 Aggressive frame queue management for low latency
+            const frameInfo = {
                 imageBitmap,
                 metadata,
                 processedAt: Date.now()
-            });
+            };
 
             // Calculate latency
             const latency = Date.now() - metadata.timestamp;
             this.latencySum += latency;
             this.latencyCount++;
 
-            // Limit queue size to prevent memory issues
-            if (this.frameQueue.length > 10) {
-                const oldFrame = this.frameQueue.shift();
-                if (oldFrame.imageBitmap) {
-                    oldFrame.imageBitmap.close();
+            // 🎯 Smart queue management - drop old frames aggressively
+            if (this.frameQueue.length >= this.maxQueueSize) {
+                // Drop oldest frames to maintain low latency
+                while (this.frameQueue.length >= this.maxQueueSize) {
+                    const oldFrame = this.frameQueue.shift();
+                    if (oldFrame.imageBitmap) {
+                        oldFrame.imageBitmap.close();
+                    }
+                    this.frameDrops++;
                 }
+            }
+
+            // Add new frame
+            this.frameQueue.push(frameInfo);
+
+            // 🏃‍♂️ Immediate rendering attempt (don't wait for RAF)
+            if (!this.renderingFrame && this.frameQueue.length > 0) {
+                this.renderNextFrame();
             }
 
         } catch (err) {
@@ -133,70 +148,127 @@ class EnhancedVideoViewer {
     startFrameRenderer() {
         this.isPlaying = true;
         
+        // 🏃‍♂️ High-performance frame renderer with immediate processing
         const renderFrame = (currentTime) => {
             if (!this.isPlaying) return;
 
-            // Render frames at target FPS
-            if (currentTime - this.lastFrameTime >= this.frameInterval) {
+            // 🚀 Process multiple frames per cycle if available (catch up)
+            let framesProcessed = 0;
+            const maxFramesPerCycle = 3; // Process up to 3 frames per RAF cycle
+            
+            while (this.frameQueue.length > 0 && framesProcessed < maxFramesPerCycle) {
                 this.renderNextFrame();
-                this.lastFrameTime = currentTime;
-                this.updatePerformanceStats();
+                framesProcessed++;
             }
 
+            // Continue frame processing loop
             requestAnimationFrame(renderFrame);
         };
 
+        // Start the rendering loop immediately
         requestAnimationFrame(renderFrame);
+        
+        // 🎯 Also setup a high-frequency interval for ultra-low latency
+        this.highFrequencyTimer = setInterval(() => {
+            if (this.frameQueue.length > 0 && !this.renderingFrame) {
+                this.renderNextFrame();
+            }
+        }, 16); // ~60 FPS interval for immediate processing
     }
 
     renderNextFrame() {
-        if (this.frameQueue.length === 0) {
-            this.updateStatus("Buffering frames...", "warning");
+        if (this.frameQueue.length === 0 || this.renderingFrame) {
+            if (this.frameQueue.length === 0) {
+                this.updateStatus("Buffering frames...", "warning");
+            }
             return;
         }
 
-        const frame = this.frameQueue.shift();
-        if (!frame || !frame.imageBitmap) return;
+        this.renderingFrame = true; // Prevent overlapping renders
+
+        // 🎯 Always take the NEWEST frame for lowest latency
+        let frame;
+        if (this.frameQueue.length > 1) {
+            // Drop intermediate frames and take the newest
+            while (this.frameQueue.length > 1) {
+                const oldFrame = this.frameQueue.shift();
+                if (oldFrame.imageBitmap) {
+                    oldFrame.imageBitmap.close();
+                }
+                this.frameDrops++;
+            }
+        }
+        
+        frame = this.frameQueue.shift();
+        if (!frame || !frame.imageBitmap) {
+            this.renderingFrame = false;
+            return;
+        }
 
         try {
-            // Clear canvas and draw frame
-            this.context.clearRect(0, 0, this.canvas.width, this.canvas.height);
-            this.context.drawImage(frame.imageBitmap, 0, 0);
+            // 🚀 Ultra-fast canvas rendering
+            this.context.drawImage(frame.imageBitmap, 0, 0, this.canvas.width, this.canvas.height);
             
-            // Clean up ImageBitmap
+            // Clean up ImageBitmap immediately
             frame.imageBitmap.close();
             
             this.frameCounter++;
             this.fpsCounter++;
             
-            // Update status with frame info
-            const latency = frame.processedAt - frame.metadata.timestamp;
-            this.updateStatus(`Playing - Frame #${frame.metadata.frameNumber} (${latency}ms latency)`, "success");
+            // Calculate real-time latency
+            const totalLatency = Date.now() - frame.metadata.timestamp;
+            const processingLatency = frame.processedAt - frame.metadata.timestamp;
+            
+            // Update status with performance info
+            this.updateStatus(
+                `🎥 Live Stream - Frame #${frame.metadata.frameNumber} | ` +
+                `${totalLatency}ms total latency | ${this.frameQueue.length} queued | ` +
+                `${this.frameDrops} dropped`, 
+                "success"
+            );
+            
+            // Performance stats update (less frequent)
+            this.updatePerformanceStats();
             
         } catch (err) {
             console.error("Render error:", err);
             if (frame.imageBitmap) {
                 frame.imageBitmap.close();
             }
+        } finally {
+            this.renderingFrame = false;
         }
     }
 
     updatePerformanceStats() {
         const now = Date.now();
-        if (now - this.lastFpsTime >= 1000) {
-            const actualFPS = this.fpsCounter;
+        if (now - this.lastFpsTime >= 2000) { // Update every 2 seconds
+            const actualFPS = this.fpsCounter / 2; // Adjust for 2-second interval
             const avgLatency = this.latencyCount > 0 ? (this.latencySum / this.latencyCount).toFixed(1) : 0;
             
-            console.log(`Viewer Stats: ${actualFPS} FPS, ${avgLatency}ms avg latency, ${this.frameQueue.length} queued`);
+            console.log(`🚀 Viewer Performance: ${actualFPS.toFixed(1)} FPS | ` +
+                       `${avgLatency}ms avg latency | ${this.frameQueue.length} queued | ` +
+                       `${this.frameDrops} frames dropped for speed`);
             
-            // Send performance data to server
+            // Send enhanced performance data to server
             if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
                 this.websocket.send(JSON.stringify({
                     type: 'performance_stats',
                     fps: actualFPS,
-                    latency: avgLatency,
-                    queueSize: this.frameQueue.length
+                    latency: parseFloat(avgLatency),
+                    queueSize: this.frameQueue.length,
+                    frameDrops: this.frameDrops,
+                    timestamp: now
                 }));
+            }
+            
+            // 🎯 Dynamic performance adjustment
+            if (parseFloat(avgLatency) > 200) { // High latency
+                this.maxQueueSize = Math.max(1, this.maxQueueSize - 1);
+                console.log(`🎯 Reduced queue size to ${this.maxQueueSize} for lower latency`);
+            } else if (parseFloat(avgLatency) < 50 && this.frameDrops < 10) { // Low latency
+                this.maxQueueSize = Math.min(5, this.maxQueueSize + 1);
+                console.log(`🚀 Increased queue size to ${this.maxQueueSize} for smoother playback`);
             }
             
             // Reset counters
@@ -204,6 +276,7 @@ class EnhancedVideoViewer {
             this.lastFpsTime = now;
             this.latencySum = 0;
             this.latencyCount = 0;
+            this.frameDrops = 0;
         }
     }
 
@@ -215,6 +288,12 @@ class EnhancedVideoViewer {
 
     reset() {
         this.isPlaying = false;
+
+        // Clear high-frequency timer
+        if (this.highFrequencyTimer) {
+            clearInterval(this.highFrequencyTimer);
+            this.highFrequencyTimer = null;
+        }
 
         if (this.websocket) {
             this.websocket.close();
@@ -239,15 +318,17 @@ class EnhancedVideoViewer {
         this.fpsCounter = 0;
         this.latencySum = 0;
         this.latencyCount = 0;
+        this.frameDrops = 0;
+        this.renderingFrame = false;
 
         this.updateStatus("Reset", "secondary");
     }
 
     // Dynamic quality adjustment
     adjustFrameRate(fps) {
-        this.frameRate = Math.max(5, Math.min(60, fps));
-        this.frameInterval = 1000 / this.frameRate;
-        console.log(`Viewer frame rate adjusted to ${this.frameRate} FPS`);
+        this.maxFrameRate = Math.max(15, Math.min(120, fps)); // Increased max to 120 FPS
+        this.frameInterval = 1000 / this.maxFrameRate;
+        console.log(`🎯 Viewer frame rate adjusted to ${this.maxFrameRate} FPS for ultra-low latency`);
     }
 }
   

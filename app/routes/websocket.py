@@ -15,6 +15,15 @@ router = APIRouter()
 # Store pending frame metadata for each camera
 pending_metadata: Dict[str, Dict[str, Any]] = {}
 
+# 🚀 Frame skipping optimization at WebSocket level
+camera_frame_counters: Dict[str, int] = {}
+camera_last_inference: Dict[str, float] = {}
+camera_inference_intervals: Dict[str, int] = {}  # Per-camera inference intervals
+INITIAL_INFERENCE_INTERVAL = 15  # Process every Nth frame through YOLO
+MAX_INFERENCE_INTERVAL = 30     # Maximum frames to skip
+MIN_INFERENCE_INTERVAL = 5      # Minimum frames to skip  
+FORCE_INFERENCE_INTERVAL = 2.0  # Force YOLO every 2 seconds minimum
+
 @router.websocket("/ws/camera/{token}")
 async def camera_websocket(websocket: WebSocket, token: str, db: Session = Depends(get_db)):
     """Real-time camera streaming endpoint"""
@@ -52,33 +61,92 @@ async def camera_websocket(websocket: WebSocket, token: str, db: Session = Depen
                         print(f"⚠️ Invalid metadata from {token}")
 
                 elif "bytes" in message and message["bytes"]:
-                    # Handle binary frame data
+                    # Handle binary frame data with smart YOLO processing
                     frame_data = message["bytes"]
                     metadata = pending_metadata.get(token)
                     
                     if metadata:
-                        print(f"📸 Processing frame #{metadata['frameNumber']} from {token} ({len(frame_data)} bytes)")
+                        # Initialize frame counters for new cameras
+                        if token not in camera_frame_counters:
+                            camera_frame_counters[token] = 0
+                            camera_last_inference[token] = 0
+                            camera_inference_intervals[token] = INITIAL_INFERENCE_INTERVAL
                         
-                        # Process frame through YOLO
-                        start_time = time.perf_counter()
-                        processed_frame = await realtime_processor.process_frame(frame_data, metadata)
-                        processing_time = (time.perf_counter() - start_time) * 1000
+                        camera_frame_counters[token] += 1
+                        current_time = time.time()
+                        frame_number = metadata['frameNumber']
+                        current_interval = camera_inference_intervals[token]
                         
-                        if processed_frame:
-                            # Add processing info to metadata
-                            enhanced_metadata = metadata.copy()
-                            enhanced_metadata.update({
-                                "processing_time_ms": processing_time,
-                                "processed_at": time.time() * 1000,
-                                "processed_size": len(processed_frame)
-                            })
+                        # 🎯 Smart YOLO processing decision
+                        should_run_yolo = (
+                            camera_frame_counters[token] % current_interval == 0 or  # Every Nth frame
+                            (current_time - camera_last_inference[token]) > FORCE_INFERENCE_INTERVAL or  # Force every 2s
+                            camera_last_inference[token] == 0  # First frame
+                        )
+                        
+                        if should_run_yolo:
+                            # 🔍 Process through YOLO inference
+                            print(f"🔍 YOLO inference on frame #{frame_number} from {token} ({len(frame_data)} bytes)")
+                            start_time = time.perf_counter()
+                            processed_frame = await realtime_processor.process_frame(frame_data, metadata)
+                            processing_time = (time.perf_counter() - start_time) * 1000
+                            camera_last_inference[token] = current_time
                             
-                            # Broadcast to all viewers
-                            await manager.broadcast_frame_to_viewers(
-                                token, 
-                                processed_frame, 
-                                enhanced_metadata
-                            )
+                            # 🎯 Adaptive performance adjustment
+                            if processing_time > 100:  # If YOLO takes more than 100ms
+                                camera_inference_intervals[token] = min(
+                                    camera_inference_intervals[token] + 5, 
+                                    MAX_INFERENCE_INTERVAL
+                                )
+                                print(f"⚡ Increased inference interval to {camera_inference_intervals[token]} for {token} (slow processing: {processing_time:.1f}ms)")
+                            elif processing_time < 30:  # If YOLO is fast
+                                camera_inference_intervals[token] = max(
+                                    camera_inference_intervals[token] - 1,
+                                    MIN_INFERENCE_INTERVAL
+                                )
+                                print(f"🚀 Decreased inference interval to {camera_inference_intervals[token]} for {token} (fast processing: {processing_time:.1f}ms)")
+                            
+                            if processed_frame:
+                                # Add processing info to metadata
+                                enhanced_metadata = metadata.copy()
+                                enhanced_metadata.update({
+                                    "processing_time_ms": processing_time,
+                                    "processed_at": time.time() * 1000,
+                                    "processed_size": len(processed_frame),
+                                    "yolo_processed": True,
+                                    "inference_frame": True
+                                })
+                                
+                                # Broadcast to all viewers
+                                await manager.broadcast_frame_to_viewers(
+                                    token, 
+                                    processed_frame, 
+                                    enhanced_metadata
+                                )
+                        else:
+                            # Pass frame through YOLO processor for cached detection overlay only
+                            start_time = time.perf_counter()
+                            processed_frame = await realtime_processor.process_frame(frame_data, metadata)
+                            processing_time = (time.perf_counter() - start_time) * 1000
+                            
+                            if processed_frame:
+                                # Add processing info to metadata
+                                enhanced_metadata = metadata.copy()
+                                enhanced_metadata.update({
+                                    "processing_time_ms": processing_time,
+                                    "processed_at": time.time() * 1000,
+                                    "processed_size": len(processed_frame),
+                                    "yolo_processed": False,
+                                    "inference_frame": False,
+                                    "cached_detections": True
+                                })
+                                
+                                # Broadcast to all viewers
+                                await manager.broadcast_frame_to_viewers(
+                                    token, 
+                                    processed_frame, 
+                                    enhanced_metadata
+                                )
                         
                         # Clear pending metadata
                         pending_metadata.pop(token, None)
@@ -97,6 +165,10 @@ async def camera_websocket(websocket: WebSocket, token: str, db: Session = Depen
     finally:
         manager.disconnect_camera(token)
         pending_metadata.pop(token, None)
+        # Clean up frame counters
+        camera_frame_counters.pop(token, None)
+        camera_last_inference.pop(token, None)
+        camera_inference_intervals.pop(token, None)
 
 @router.websocket("/ws/view/{token}")
 async def viewer_websocket(websocket: WebSocket, token: str, db: Session = Depends(get_db)):
@@ -168,11 +240,33 @@ async def relay_performance_to_camera(token: str, viewer_stats: Dict[str, Any]):
         camera_ws = manager.active_connections.get(token)
         if camera_ws and camera_ws.client_state == WebSocketState.CONNECTED:
             
-            # Simple adaptive logic
+            # Enhanced adaptive logic based on viewer performance
             viewer_fps = viewer_stats.get("fps", 30)
             viewer_latency = viewer_stats.get("latency", 0)
+            frame_drops = viewer_stats.get("frameDrops", 0)
             
-            suggested_changes = {}
+            # 🎯 Adjust inference interval based on viewer performance
+            current_interval = camera_inference_intervals.get(token, INITIAL_INFERENCE_INTERVAL)
+            
+            if viewer_latency > 150:  # High latency - reduce inference frequency
+                new_interval = min(current_interval + 3, MAX_INFERENCE_INTERVAL)
+                camera_inference_intervals[token] = new_interval
+                print(f"🐌 High viewer latency ({viewer_latency}ms) - increased inference interval to {new_interval} for {token}")
+                
+            elif viewer_latency < 50 and frame_drops < 5:  # Low latency and few drops - can increase inference frequency
+                new_interval = max(current_interval - 1, MIN_INFERENCE_INTERVAL)
+                camera_inference_intervals[token] = new_interval
+                print(f"🚀 Low viewer latency ({viewer_latency}ms) - decreased inference interval to {new_interval} for {token}")
+            
+            suggested_changes = {
+                "type": "performance_feedback",
+                "inference_interval": camera_inference_intervals.get(token, INITIAL_INFERENCE_INTERVAL),
+                "viewer_performance": {
+                    "fps": viewer_fps,
+                    "latency": viewer_latency,
+                    "frame_drops": frame_drops
+                }
+            }
             
             if viewer_latency > 200:  # High latency
                 suggested_changes["fps"] = max(15, viewer_fps - 5)
@@ -210,3 +304,19 @@ async def get_camera_stats(token: str, db: Session = Depends(get_db)):
         "processor_stats": processor_stats,
         "pending_metadata": token in pending_metadata
     }
+
+async def get_camera_performance_stats(token: str) -> Dict[str, Any]:
+    """Get current performance statistics for a camera"""
+    return {
+        "frame_count": camera_frame_counters.get(token, 0),
+        "inference_interval": camera_inference_intervals.get(token, INITIAL_INFERENCE_INTERVAL),
+        "last_inference": camera_last_inference.get(token, 0),
+        "frames_since_inference": camera_frame_counters.get(token, 0) % camera_inference_intervals.get(token, INITIAL_INFERENCE_INTERVAL),
+        "active": token in camera_frame_counters
+    }
+
+async def adjust_camera_inference_interval(token: str, new_interval: int):
+    """Manually adjust inference interval for a camera"""
+    if token in camera_inference_intervals:
+        camera_inference_intervals[token] = max(MIN_INFERENCE_INTERVAL, min(MAX_INFERENCE_INTERVAL, new_interval))
+        print(f"🎛️ Manually adjusted inference interval for {token} to {camera_inference_intervals[token]}")
