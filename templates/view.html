@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+
+{% block title %}{{ camera.name }} - Camera Stream{% endblock %}
+
+{% block content %}
+<div class="header">
+    <h1>📹 {{ camera.name }}</h1>
+    <p>📍 {{ camera.location }}
+        {% if camera.is_residential %}
+            <span class="badge badge-residential">Residential</span>
+        {% else %}
+            <span class="badge badge-commercial">Commercial</span>
+        {% endif %}
+    </p>
+    <a href="/" class="btn btn-primary">Back to Home</a>
+</div>
+
+<div class="admin-section">
+    <div id="connection-status" class="alert alert-error">Connecting...</div>
+    
+    <div class="video-container">
+        <video id="stream-video" class="video-stream" autoplay muted playsinline controls>
+            <div class="video-placeholder">
+                <p>🎥 Waiting for camera stream...</p>
+                <p>Make sure a device is streaming to this camera.</p>
+            </div>
+        </video>
+    </div>
+    
+    <div class="controls">
+        <button onclick="window.videoViewer && window.videoViewer.connect()" class="btn btn-success">Reconnect</button>
+        <button onclick="window.location.reload()" class="btn btn-primary">Refresh</button>
+        <button onclick="toggleDebugInfo()" class="btn btn-secondary">Debug Info</button>
+    </div>
+    
+    <div id="debug-info" style="display: none; background: #f8f9fa; padding: 15px; border-radius: 8px; margin-top: 15px; font-family: monospace; font-size: 12px;">
+        <h4>Debug Information</h4>
+        <div id="debug-content">Loading...</div>
+    </div>
+</div>
+
+<div class="notification-section">
+    <h3>🔔 Get Notifications</h3>
+    <p>Subscribe to receive push notifications when motion is detected on this camera.</p>
+    <button id="subscribe-btn" onclick="subscribeToPushNotifications({{ camera.id }})" class="btn btn-success">
+        Subscribe to Notifications
+    </button>
+</div>
+
+<div style="background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px); border-radius: 15px; padding: 25px; margin-top: 20px; box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);">
+    <h3>📋 Camera Information</h3>
+    <p><strong>Camera Name:</strong> {{ camera.name }}</p>
+    <p><strong>Location:</strong> {{ camera.location }}</p>
+    <p><strong>Type:</strong> 
+        {% if camera.is_residential %}
+            Residential Area
+        {% else %}
+            Commercial Area
+        {% endif %}
+    </p>
+    <p><strong>Share this page:</strong> 
+        <input type="text" value="{{ request.url }}" readonly style="width: 100%; padding: 8px; margin-top: 5px; border: 1px solid #ddd; border-radius: 5px;" onclick="this.select()">
+    </p>
+</div>
+
+<!-- Hidden data for JavaScript -->
+<div data-camera-token="{{ camera.camera_token }}" style="display: none;"></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const cameraToken = '{{ camera.camera_token }}';
+    if (cameraToken) {
+        window.videoViewer = new VideoViewer(cameraToken);
+        window.videoViewer.connect();
+    }
+});
+</script>
+{% endblock %}

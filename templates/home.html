@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+
+{% block title %}Home - Camera Streaming Service{% endblock %}
+
+{% block content %}
+<div class="header">
+    <h1>🎥 Camera Streaming Service</h1>
+    <p>Find and watch live camera streams from around your area</p>
+</div>
+
+<div class="search-section">
+    <h2>Search Cameras</h2>
+    <div class="search-box">
+        <input type="text" id="search-input" class="search-input" placeholder="Search by location or camera name...">
+        <button onclick="searchCameras()" class="btn btn-primary">Search</button>
+    </div>
+    
+    <div class="cameras-grid" id="cameras-grid">
+        {% for camera in cameras %}
+        <div class="camera-card">
+            <h3>{{ camera.name }}</h3>
+            <div class="camera-info">
+                <p><strong>Location:</strong> {{ camera.location }}
+                    {% if camera.is_residential %}
+                        <span class="badge badge-residential">Residential</span>
+                    {% else %}
+                        <span class="badge badge-commercial">Commercial</span>
+                    {% endif %}
+                </p>
+            </div>
+            <a href="/view/{{ camera.public_slug }}" class="btn btn-primary">View Stream</a>
+        </div>
+        {% endfor %}
+        
+        {% if not cameras %}
+        <p style="text-align: center; color: #7f8c8d; grid-column: 1 / -1;">No cameras available at the moment.</p>
+        {% endif %}
+    </div>
+</div>
+
+<div style="text-align: center; margin-top: 30px;">
+    <a href="/admin" class="btn btn-success">Admin Panel</a>
+</div>
+{% endblock %}

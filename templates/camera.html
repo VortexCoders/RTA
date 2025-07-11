@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+
+{% block title %}Camera Streaming - {{ camera.name }}{% endblock %}
+
+{% block content %}
+<div class="header">
+    <h1>📹 Camera Streaming Device</h1>
+    <p>{{ camera.name }} - {{ camera.location }}</p>
+    <p style="color: #e74c3c; font-weight: bold;">⚠️ This device will stream video to viewers</p>
+</div>
+
+<div class="admin-section">
+    <div id="status" class="alert alert-error">Ready to start streaming</div>
+    
+    <div class="video-container">
+        <video id="local-video" class="video-stream" autoplay muted>
+            <div class="video-placeholder">
+                <p>📷 Click "Start Streaming" to begin</p>
+            </div>
+        </video>
+    </div>
+    
+    <div class="controls">
+        <button id="start-btn" onclick="window.cameraStreamer && window.cameraStreamer.startStreaming()" class="btn btn-success">
+            🔴 Start Streaming
+        </button>
+        <button id="stop-btn" onclick="window.cameraStreamer && window.cameraStreamer.stopStreaming()" class="btn btn-danger" style="display: none;">
+            ⏹️ Stop Streaming
+        </button>
+    </div>
+</div>
+
+<div style="background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px); border-radius: 15px; padding: 25px; margin-top: 20px; box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);">
+    <h3>📋 Instructions</h3>
+    <ol style="line-height: 1.8;">
+        <li>Click "Start Streaming" to begin broadcasting your camera feed</li>
+        <li>Allow camera and microphone permissions when prompted</li>
+        <li>Your stream will be visible to viewers on the public page</li>
+        <li>Only one device can stream at a time - new connections will disconnect previous ones</li>
+        <li>Keep this page open and this device connected to maintain the stream</li>
+    </ol>
+    
+    <div style="background: #fff3cd; border: 1px solid #ffeaa7; border-radius: 8px; padding: 15px; margin-top: 15px;">
+        <h4 style="color: #856404; margin: 0 0 10px 0;">🔗 Share Links</h4>
+        <p style="margin: 5px 0;"><strong>Public Viewing Page:</strong> 
+            <a href="/view/{{ camera.public_slug }}" target="_blank">{{ request.url.scheme }}://{{ request.url.netloc }}/view/{{ camera.public_slug }}</a>
+        </p>
+        <p style="margin: 5px 0;"><strong>This Camera Page:</strong> 
+            <input type="text" value="{{ request.url }}" readonly style="width: 100%; padding: 8px; margin-top: 5px; border: 1px solid #ddd; border-radius: 5px;" onclick="this.select()">
+        </p>
+    </div>
+</div>
+
+<div style="background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px); border-radius: 15px; padding: 25px; margin-top: 20px; box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);">
+    <h3>🛡️ Privacy & Security</h3>
+    <ul style="line-height: 1.8;">
+        <li>Your camera feed is streamed live and not stored on our servers</li>
+        <li>Only people with the public viewing link can see your stream</li>
+        <li>You can stop streaming at any time by clicking "Stop Streaming"</li>
+        <li>Closing this page or browser will automatically stop the stream</li>
+    </ul>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const token = '{{ camera.camera_token }}';
+    if (token) {
+        window.cameraStreamer = new CameraStreamer(token);
+    }
+});
+</script>
+{% endblock %}
