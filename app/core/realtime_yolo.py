@@ -17,7 +17,7 @@ class RealtimeYOLOProcessor:
         self.model = YOLO(model_path)
         if torch.cuda.is_available():
             self.model.to("cuda")
-            self.model.model.half()  # Use half precision for speed
+            self.model.model.half()
             print("🚀 YOLO loaded on GPU with FP16")
         else:
             print("⚠️ YOLO loaded on CPU")
