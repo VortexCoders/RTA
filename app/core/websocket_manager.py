@@ -5,7 +5,6 @@ import os
 import asyncio
 import json
 from datetime import datetime
-import json
 
 SAVE_DIR = "./recordings"
 os.makedirs(SAVE_DIR, exist_ok=True)
@@ -120,37 +119,9 @@ class ConnectionManager:
                     print(f"Error closing viewer for {token}: {e}")
         self.viewers.clear()
 
-    async def broadcast_frame_to_viewers(self, camera_token: str, frame_data: bytes, metadata: dict):
-        """Broadcast processed frame with metadata to all viewers"""
-        if camera_token not in self.viewers:
-            return
-
-        disconnected = []
-        
-        for ws in self.viewers[camera_token]:
-            if ws.client_state != WebSocketState.CONNECTED:
-                disconnected.append(ws)
-                continue
-                
-            try:
-                # Send metadata first
-                await ws.send_text(json.dumps({
-                    "type": "frame_metadata",
-                    **metadata
-                }))
-                
-                # Then send binary frame data
-                await ws.send_bytes(frame_data)
-                
-            except Exception as e:
-                print(f"⚠️ Failed to send frame to viewer: {e}")
-                disconnected.append(ws)
-
-        # Remove dead sockets
-        for ws in disconnected:
-            try:
-                self.viewers[camera_token].remove(ws)
-            except ValueError:
-                pass
+    # DEPRECATED: No longer needed with HTTP polling
+    # async def broadcast_processed_video_to_viewers(self, camera_token: str, video_data: bytes, metadata: dict):
+    #     """Broadcast processed video clip with metadata to all viewers"""
+    #     pass
 
 manager = ConnectionManager()

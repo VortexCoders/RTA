@@ -4,13 +4,18 @@ class EnhancedVideoStreamer {
         this.ws = null;
         this.mediaStream = null;
         this.isStreaming = false;
-        this.canvas = null;
-        this.context = null;
         this.video = null;
-        this.animationId = null;
-        this.lastFrameTime = 0;
         this.frameCounter = 0;
-        this.qualityFactor = 0.8; // JPEG quality
+        
+        // Video recording properties for 10-second clips
+        this.mediaRecorder = null;
+        this.recordedChunks = [];
+        this.recordingDuration = 10000; // 10 seconds in milliseconds
+        this.recordingTimer = null;
+        this.isRecording = false;
+        this.videoQueue = [];
+        this.isProcessingQueue = false;
+        this.videoBitrate = 2500000; // 2.5 Mbps default
         
         // Camera selection properties
         this.availableCameras = [];
@@ -48,10 +53,10 @@ class EnhancedVideoStreamer {
         this.ws.binaryType = "arraybuffer";
 
         this.ws.onopen = () => {
-            console.log("WebSocket connected - Real-time streaming");
-            this.setStatus(`Streaming ${this.getSelectedCameraLabel()} in real-time...`, "success");
+            console.log("WebSocket connected - 10-second video clip streaming");
+            this.setStatus(`Streaming ${this.getSelectedCameraLabel()} in 10s clips...`, "success");
             this.isStreaming = true;
-            this.startFrameCapture();
+            this.startVideoRecording();
             this.updateCameraInfo(); // Update UI
             document.getElementById("start-btn").style.display = "none";
             document.getElementById("stop-btn").style.display = "inline-block";
@@ -94,68 +99,218 @@ class EnhancedVideoStreamer {
         };
     }
 
-    startFrameCapture() {
-        const captureFrame = (currentTime) => {
-            if (!this.isStreaming) return;
+    startVideoRecording() {
+        if (!this.mediaStream || !this.video) {
+            console.error("No media stream available for recording");
+            return;
+        }
 
-            // 🚀 Send frames as fast as possible - no throttling!
-            this.captureAndSendFrame();
-            this.frameCounter++;
-
-            this.animationId = requestAnimationFrame(captureFrame);
+        // Setup MediaRecorder for 10-second clips
+        const options = {
+            mimeType: 'video/webm;codecs=vp9',
+            videoBitsPerSecond: this.videoBitrate
         };
 
-        this.animationId = requestAnimationFrame(captureFrame);
+        try {
+            this.mediaRecorder = new MediaRecorder(this.mediaStream, options);
+        } catch (e) {
+            // Fallback to default codec
+            console.warn("VP9 not supported, falling back to default codec");
+            this.mediaRecorder = new MediaRecorder(this.mediaStream);
+        }
+
+        this.mediaRecorder.ondataavailable = (event) => {
+            if (event.data.size > 0) {
+                this.recordedChunks.push(event.data);
+            }
+        };
+
+        this.mediaRecorder.onstop = () => {
+            this.processRecordedVideo();
+        };
+
+        // Start the first recording cycle
+        this.startRecordingCycle();
     }
 
-    async captureAndSendFrame() {
-        if (!this.video || !this.canvas || !this.context || this.ws.readyState !== WebSocket.OPEN) {
+    startRecordingCycle() {
+        if (!this.isStreaming) return;
+
+        this.recordedChunks = [];
+        this.isRecording = true;
+        
+        console.log(`📹 Starting 10-second recording cycle #${this.frameCounter + 1}`);
+        this.setStatus(`Recording 10s clip #${this.frameCounter + 1}...`, "info");
+
+        // Start recording
+        this.mediaRecorder.start();
+
+        // Stop recording after 10 seconds
+        this.recordingTimer = setTimeout(() => {
+            if (this.mediaRecorder && this.mediaRecorder.state === 'recording') {
+                this.mediaRecorder.stop();
+                this.isRecording = false;
+            }
+        }, this.recordingDuration);
+    }
+
+    async processRecordedVideo() {
+        if (this.recordedChunks.length === 0) {
+            console.warn("No video data recorded");
+            this.scheduleNextRecording();
             return;
         }
 
         try {
-            // Draw current video frame to canvas
-            this.context.drawImage(this.video, 0, 0, this.canvas.width, this.canvas.height);
+            // Create video blob from chunks
+            const videoBlob = new Blob(this.recordedChunks, { type: 'video/webm' });
+            const arrayBuffer = await videoBlob.arrayBuffer();
             
-            // Convert to JPEG blob for better compression
-            this.canvas.toBlob(async (blob) => {
-                if (blob && this.ws.readyState === WebSocket.OPEN) {
-                    const arrayBuffer = await blob.arrayBuffer();
-                    
-                    // Create frame metadata
-                    const metadata = {
-                        timestamp: Date.now(),
-                        frameNumber: this.frameCounter,
-                        width: this.canvas.width,
-                        height: this.canvas.height,
-                        format: 'jpeg',
-                        camera: this.getSelectedCameraLabel(),
-                        cameraId: this.selectedCameraId
-                    };
+            console.log(`📦 Video clip ready: ${(arrayBuffer.byteLength / 1024 / 1024).toFixed(2)} MB`);
 
-                    // Send metadata as text first
-                    this.ws.send(JSON.stringify({
-                        type: 'frame_metadata',
-                        ...metadata
-                    }));
+            // Add to queue for processing
+            const videoData = {
+                data: arrayBuffer,
+                timestamp: Date.now(),
+                clipNumber: this.frameCounter + 1,
+                duration: this.recordingDuration / 1000,
+                camera: this.getSelectedCameraLabel(),
+                cameraId: this.selectedCameraId
+            };
 
-                    // Send frame data as binary
-                    this.ws.send(arrayBuffer);
-                }
-            }, 'image/jpeg', this.qualityFactor);
+            this.videoQueue.push(videoData);
+            this.frameCounter++;
 
-        } catch (err) {
-            console.error("Frame capture error:", err);
+            // Process queue if not already processing
+            if (!this.isProcessingQueue) {
+                this.processVideoQueue();
+            }
+
+            // Schedule next recording
+            this.scheduleNextRecording();
+
+        } catch (error) {
+            console.error("Error processing recorded video:", error);
+            this.scheduleNextRecording();
         }
+    }
+
+    async processVideoQueue() {
+        if (this.videoQueue.length === 0 || this.isProcessingQueue) {
+            return;
+        }
+
+        this.isProcessingQueue = true;
+
+        while (this.videoQueue.length > 0 && this.ws && this.ws.readyState === WebSocket.OPEN) {
+            const videoData = this.videoQueue.shift();
+            
+            try {
+                this.setStatus(`Sending clip #${videoData.clipNumber} for processing...`, "info");
+
+                // Send metadata first
+                await this.sendVideoMetadata(videoData);
+
+                // Send video data in chunks to avoid WebSocket limits
+                await this.sendVideoInChunks(videoData.data, videoData.clipNumber);
+
+                console.log(`✅ Sent video clip #${videoData.clipNumber} for YOLO processing`);
+
+            } catch (error) {
+                console.error(`❌ Failed to send video clip #${videoData.clipNumber}:`, error);
+            }
+
+            // Small delay between clips to prevent overwhelming the server
+            await new Promise(resolve => setTimeout(resolve, 100));
+        }
+
+        this.isProcessingQueue = false;
+        
+        if (this.isStreaming) {
+            this.setStatus(`Streaming ${this.getSelectedCameraLabel()} in 10s clips...`, "success");
+        }
+    }
+
+    async sendVideoMetadata(videoData) {
+        const metadata = {
+            type: 'video_metadata',
+            timestamp: videoData.timestamp,
+            clipNumber: videoData.clipNumber,
+            duration: videoData.duration,
+            size: videoData.data.byteLength,
+            camera: videoData.camera,
+            cameraId: videoData.cameraId,
+            format: 'webm'
+        };
+
+        this.ws.send(JSON.stringify(metadata));
+    }
+
+    async sendVideoInChunks(arrayBuffer, clipNumber) {
+        const chunkSize = 64 * 1024; // 64KB chunks
+        const totalChunks = Math.ceil(arrayBuffer.byteLength / chunkSize);
+
+        for (let i = 0; i < totalChunks; i++) {
+            const start = i * chunkSize;
+            const end = Math.min(start + chunkSize, arrayBuffer.byteLength);
+            const chunk = arrayBuffer.slice(start, end);
+
+            // Send chunk header
+            this.ws.send(JSON.stringify({
+                type: 'video_chunk',
+                clipNumber: clipNumber,
+                chunkIndex: i,
+                totalChunks: totalChunks,
+                chunkSize: chunk.byteLength
+            }));
+
+            // Send chunk data
+            this.ws.send(chunk);
+
+            // Small delay to prevent overwhelming
+            if (i % 10 === 0) {
+                await new Promise(resolve => setTimeout(resolve, 10));
+            }
+        }
+
+        // Send completion signal
+        this.ws.send(JSON.stringify({
+            type: 'video_complete',
+            clipNumber: clipNumber,
+            totalChunks: totalChunks
+        }));
+    }
+
+    scheduleNextRecording() {
+        if (!this.isStreaming) return;
+
+        // Start next recording cycle immediately (continuous recording)
+        setTimeout(() => {
+            if (this.isStreaming) {
+                this.startRecordingCycle();
+            }
+        }, 100); // Small delay to prevent overlapping
     }
 
     stopStreaming() {
         this.isStreaming = false;
 
-        if (this.animationId) {
-            cancelAnimationFrame(this.animationId);
-            this.animationId = null;
+        // Stop recording timer
+        if (this.recordingTimer) {
+            clearTimeout(this.recordingTimer);
+            this.recordingTimer = null;
         }
+
+        // Stop media recorder
+        if (this.mediaRecorder && this.mediaRecorder.state === 'recording') {
+            this.mediaRecorder.stop();
+        }
+        this.mediaRecorder = null;
+        this.isRecording = false;
+
+        // Clear video queue
+        this.videoQueue = [];
+        this.isProcessingQueue = false;
 
         if (this.mediaStream) {
             this.mediaStream.getTracks().forEach(track => track.stop());
@@ -171,10 +326,6 @@ class EnhancedVideoStreamer {
             this.video.srcObject = null;
         }
 
-        // Cleanup canvas
-        this.canvas = null;
-        this.context = null;
-
         // Re-enable camera selection
         if (this.cameraSelectElement) {
             this.cameraSelectElement.disabled = false;
@@ -184,7 +335,7 @@ class EnhancedVideoStreamer {
         document.getElementById("stop-btn").style.display = "none";
         this.setStatus("Stopped", "error");
 
-        console.log(`Total frames sent: ${this.frameCounter} from ${this.getSelectedCameraLabel()}`);
+        console.log(`Total video clips sent: ${this.frameCounter} from ${this.getSelectedCameraLabel()}`);
         this.frameCounter = 0;
     }
 
@@ -196,9 +347,11 @@ class EnhancedVideoStreamer {
 
     // Dynamic quality adjustment based on backend feedback
     adjustQuality(factor) {
-        this.qualityFactor = Math.max(0.1, Math.min(1.0, factor));
+        // Adjust video bitrate instead of JPEG quality
+        const baseBitrate = 2500000; // 2.5 Mbps base
+        this.videoBitrate = Math.max(500000, Math.min(5000000, baseBitrate * factor)); // 0.5-5 Mbps range
         this.updateCameraInfo(); // Update UI
-        console.log(`Quality adjusted to ${this.qualityFactor} based on backend feedback`);
+        console.log(`Video bitrate adjusted to ${(this.videoBitrate / 1000000).toFixed(1)} Mbps based on backend feedback`);
     }
 
     async initializeCameraSelection() {
@@ -442,7 +595,7 @@ class EnhancedVideoStreamer {
                     height: { ideal: 1080, min: 720 },
                     frameRate: { ideal: 30, min: 15 }
                 },
-                audio: false
+                audio: false // For now, no audio in clips
             };
             
             console.log("Starting video capture with constraints:", constraints);
@@ -451,18 +604,10 @@ class EnhancedVideoStreamer {
             this.video = document.getElementById('local-video');
             this.video.srcObject = this.mediaStream;
 
-            // Create canvas for frame capture if not exists
-            if (!this.canvas) {
-                this.canvas = document.createElement('canvas');
-                this.context = this.canvas.getContext('2d');
-            }
-
             // Wait for video metadata to load
             await new Promise(resolve => {
                 this.video.onloadedmetadata = () => {
-                    this.canvas.width = this.video.videoWidth;
-                    this.canvas.height = this.video.videoHeight;
-                    console.log(`Video resolution: ${this.canvas.width}x${this.canvas.height}`);
+                    console.log(`Video resolution: ${this.video.videoWidth}x${this.video.videoHeight}`);
                     resolve();
                 };
             });

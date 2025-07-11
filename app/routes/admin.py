@@ -58,3 +58,23 @@ async def delete_camera(camera_id: int, username: str = Depends(authenticate_adm
     camera.is_active = False
     db.commit()
     return {"message": "Camera deleted"}
+
+@router.get("/dashboard", response_class=HTMLResponse)
+async def processing_dashboard(request: Request, username: str = Depends(authenticate_admin)):
+    """Video processing dashboard with queue stats"""
+    return templates.TemplateResponse("dashboard.html", {"request": request})
+
+@router.get("/cameras")
+async def get_cameras_json(username: str = Depends(authenticate_admin), db: Session = Depends(get_db)):
+    """Get list of cameras for dashboard"""
+    cameras = db.query(Camera).filter(Camera.is_active == True).all()
+    return [
+        {
+            "id": camera.id,
+            "name": camera.name,
+            "location": camera.location,
+            "camera_token": camera.camera_token,
+            "public_slug": camera.public_slug
+        }
+        for camera in cameras
+    ]

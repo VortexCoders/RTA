@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Video Processing Dashboard</title>
+    <style>
+        body { font-family: Arial; margin: 20px; }
+        .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
+        .stat-card { border: 1px solid #ddd; padding: 15px; border-radius: 8px; background: #f9f9f9; }
+        .stat-number { font-size: 2em; color: #007bff; font-weight: bold; }
+        .queue-item { background: #e9ecef; padding: 8px; margin: 5px 0; border-radius: 4px; font-size: 0.9em; }
+        .refresh-btn { background: #28a745; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; }
+        .camera-section { margin: 20px 0; border: 2px solid #007bff; padding: 15px; border-radius: 8px; }
+    </style>
+</head>
+<body>
+    <h1>🚀 Video Processing Dashboard</h1>
+    
+    <button class="refresh-btn" onclick="refreshDashboard()">🔄 Refresh</button>
+    
+    <div class="stats-grid">
+        <div class="stat-card">
+            <h3>🎬 Global Processing Stats</h3>
+            <div>Processing Queue: <span class="stat-number" id="processing-queue">0</span></div>
+            <div>Clips Processed: <span class="stat-number" id="clips-processed">0</span></div>
+            <div>Clips Failed: <span class="stat-number" id="clips-failed">0</span></div>
+            <div>Avg Processing Time: <span class="stat-number" id="avg-time">0</span>s</div>
+            <div>Workers Active: <span class="stat-number" id="worker-count">0</span></div>
+        </div>
+    </div>
+    
+    <div id="camera-stats"></div>
+
+    <script>
+        async function refreshDashboard() {
+            try {
+                // Get list of cameras first
+                const response = await fetch('/admin/cameras');
+                const cameras = await response.json();
+                
+                let html = '';
+                
+                for (const camera of cameras) {
+                    const statsResponse = await fetch(`/api/camera/${camera.camera_token}/stats`);
+                    const stats = await statsResponse.json();
+                    
+                    if (stats.error) continue;
+                    
+                    html += `
+                        <div class="camera-section">
+                            <h3>📹 ${camera.name} (${camera.camera_token})</h3>
+                            <div class="stats-grid">
+                                <div class="stat-card">
+                                    <h4>📊 Connection Status</h4>
+                                    <div>Camera Connected: <span class="stat-number">${stats.camera_connected ? '✅' : '❌'}</span></div>
+                                    <div>Processed Queue: <span class="stat-number">${stats.processed_queue_size}</span>/${stats.max_queue_size}</div>
+                                    <div>Processing Queue: <span class="stat-number">${stats.processing_queue_size}</span></div>
+                                </div>
+                                <div class="stat-card">
+                                    <h4>🎥 Recent Clips</h4>
+                                    ${stats.latest_clips.map(clip => 
+                                        `<div class="queue-item">
+                                            Clip #${clip.clip_number} - ${clip.processing_time.toFixed(2)}s - ${(clip.size/1024/1024).toFixed(2)}MB
+                                        </div>`
+                                    ).join('')}
+                                    ${stats.latest_clips.length === 0 ? '<div class="queue-item">No clips processed yet</div>' : ''}
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                    
+                    // Update global stats (using first camera's stats)
+                    if (cameras.indexOf(camera) === 0) {
+                        document.getElementById('processing-queue').textContent = stats.processing_queue_size;
+                        document.getElementById('clips-processed').textContent = stats.processing_stats.clips_processed;
+                        document.getElementById('clips-failed').textContent = stats.processing_stats.clips_failed;
+                        document.getElementById('avg-time').textContent = stats.processing_stats.avg_processing_time.toFixed(2);
+                        document.getElementById('worker-count').textContent = stats.worker_count;
+                    }
+                }
+                
+                document.getElementById('camera-stats').innerHTML = html;
+                
+            } catch (error) {
+                console.error('Dashboard refresh error:', error);
+                document.getElementById('camera-stats').innerHTML = '<div class="stat-card">❌ Error loading dashboard data</div>';
+            }
+        }
+        
+        // Auto-refresh every 5 seconds
+        refreshDashboard();
+        setInterval(refreshDashboard, 5000);
+    </script>
+</body>
+</html>

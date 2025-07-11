@@ -5,50 +5,61 @@ class EnhancedVideoViewer {
         this.statusElement = document.getElementById('connection-status');
         
         this.websocket = null;
-        this.mediaSource = null;
-        this.sourceBuffer = null;
-        this.frameQueue = [];
+        this.videoQueue = [];
         this.isPlaying = false;
-        this.maxFrameRate = 60; // Increased from 30 for faster processing
-        this.frameInterval = 1000 / this.maxFrameRate;
-        this.lastFrameTime = 0;
+        this.currentVideoIndex = 0;
+        this.bufferSize = 3; // Keep 3 video clips buffered
         this.frameCounter = 0;
-        this.canvas = null;
-        this.context = null;
-        this.pendingMetadata = null;
         
-        // Enhanced performance monitoring
+        // Video processing
+        this.pendingVideoData = new Map(); // For chunked video assembly
+        this.processedVideos = [];
+        this.playbackBuffer = [];
+        this.isBuffering = true;
+        this.bufferThreshold = 2; // Start playing when we have 2 clips ready
+        
+        // Performance monitoring
         this.fpsCounter = 0;
         this.lastFpsTime = Date.now();
         this.latencySum = 0;
         this.latencyCount = 0;
-        this.maxQueueSize = 3; // Reduced to minimize latency
-        this.frameDrops = 0;
-        this.renderingFrame = false; // Prevent frame rendering overlap
+        this.clipsReceived = 0;
+        this.clipsPlayed = 0;
     }
 
     connect() {
         this.updateStatus("Connecting...", "info");
-        this.setupCanvas();
+        this.setupVideoElement();
         this.setupWebSocket();
     }
 
-    setupCanvas() {
-        // Create canvas for real-time frame rendering
-        this.canvas = document.createElement('canvas');
-        this.context = this.canvas.getContext('2d');
+    setupVideoElement() {
+        // Ensure video element is ready for continuous playback
+        this.videoElement.style.width = '100%';
+        this.videoElement.style.height = 'auto';
+        this.videoElement.style.maxWidth = '800px';
+        this.videoElement.style.border = '1px solid #ddd';
+        this.videoElement.muted = true; // Start muted for autoplay
+        this.videoElement.controls = true;
+        this.videoElement.preload = 'auto';
         
-        // Replace video element with canvas or overlay
-        const container = this.videoElement.parentElement;
-        this.canvas.id = 'stream-canvas';
-        this.canvas.style.width = '100%';
-        this.canvas.style.height = 'auto';
-        this.canvas.style.maxWidth = '800px';
-        this.canvas.style.border = '1px solid #ddd';
+        // Handle video events
+        this.videoElement.addEventListener('ended', () => {
+            this.playNextVideo();
+        });
         
-        // Hide video element and show canvas
-        this.videoElement.style.display = 'none';
-        container.appendChild(this.canvas);
+        this.videoElement.addEventListener('error', (e) => {
+            console.error("Video playback error:", e);
+            this.playNextVideo(); // Try to recover
+        });
+        
+        this.videoElement.addEventListener('loadstart', () => {
+            console.log("🎬 Loading new video clip...");
+        });
+        
+        this.videoElement.addEventListener('canplay', () => {
+            console.log("✅ Video clip ready to play");
+        });
     }
 
     setupWebSocket() {
@@ -57,37 +68,21 @@ class EnhancedVideoViewer {
         this.websocket.binaryType = 'arraybuffer';
 
         this.websocket.onopen = () => {
-            this.updateStatus("Connected - Real-time stream", "success");
-            this.startFrameRenderer();
+            this.updateStatus("Connected - Receiving 10s video clips", "success");
+            this.isPlaying = true;
         };
 
         this.websocket.onmessage = (event) => {
             if (typeof event.data === 'string') {
                 try {
                     const message = JSON.parse(event.data);
-                    if (message.type === 'frame_metadata') {
-                        this.pendingMetadata = {
-                            timestamp: message.timestamp,
-                            frameNumber: message.frameNumber,
-                            width: message.width,
-                            height: message.height,
-                            format: message.format,
-                            receivedAt: Date.now()
-                        };
-                        
-                        // Update canvas size if needed
-                        if (this.canvas.width !== message.width || this.canvas.height !== message.height) {
-                            this.canvas.width = message.width;
-                            this.canvas.height = message.height;
-                        }
-                    }
+                    this.handleTextMessage(message);
                 } catch (e) {
-                    console.error("Failed to parse metadata:", e);
+                    console.warn("Failed to parse message:", e);
                 }
-            } else if (event.data instanceof ArrayBuffer && this.pendingMetadata) {
-                // Process binary frame data
-                this.processFrame(event.data, this.pendingMetadata);
-                this.pendingMetadata = null;
+            } else {
+                // Binary data - video chunk
+                this.handleBinaryMessage(event.data);
             }
         };
 
@@ -102,182 +97,192 @@ class EnhancedVideoViewer {
         };
     }
 
-    async processFrame(frameData, metadata) {
+    handleTextMessage(message) {
+        switch (message.type) {
+            case 'video_metadata':
+                console.log(`📹 Receiving video clip #${message.clipNumber} (${(message.size / 1024 / 1024).toFixed(2)} MB)`);
+                this.pendingVideoData.set(message.clipNumber, {
+                    metadata: message,
+                    chunks: [],
+                    receivedChunks: 0,
+                    totalChunks: 0
+                });
+                break;
+
+            case 'video_chunk':
+                // Initialize chunk tracking for this clip
+                if (this.pendingVideoData.has(message.clipNumber)) {
+                    const videoData = this.pendingVideoData.get(message.clipNumber);
+                    videoData.totalChunks = message.totalChunks;
+                }
+                break;
+
+            case 'video_complete':
+                this.assembleAndProcessVideo(message.clipNumber);
+                break;
+
+            case 'keepalive':
+                // Server keepalive, no action needed
+                break;
+
+            default:
+                console.log("📨 Server message:", message);
+        }
+    }
+
+    handleBinaryMessage(data) {
+        // Find which video this chunk belongs to (latest pending)
+        let targetClipNumber = null;
+        for (const [clipNumber, videoData] of this.pendingVideoData.entries()) {
+            if (videoData.receivedChunks < videoData.totalChunks || videoData.totalChunks === 0) {
+                targetClipNumber = clipNumber;
+                break;
+            }
+        }
+
+        if (targetClipNumber !== null && this.pendingVideoData.has(targetClipNumber)) {
+            const videoData = this.pendingVideoData.get(targetClipNumber);
+            videoData.chunks.push(data);
+            videoData.receivedChunks++;
+
+            // Log progress periodically
+            if (videoData.receivedChunks % 50 === 0 || videoData.receivedChunks === videoData.totalChunks) {
+                console.log(`📦 Clip #${targetClipNumber}: ${videoData.receivedChunks}/${videoData.totalChunks} chunks received`);
+            }
+        }
+    }
+
+    async assembleAndProcessVideo(clipNumber) {
+        const videoData = this.pendingVideoData.get(clipNumber);
+        if (!videoData || videoData.chunks.length === 0) {
+            console.warn(`❌ No video data for clip #${clipNumber}`);
+            return;
+        }
+
         try {
-            // Create blob from frame data
-            const blob = new Blob([frameData], { type: `image/${metadata.format}` });
-            const imageBitmap = await createImageBitmap(blob);
-            
-            // 🚀 Aggressive frame queue management for low latency
-            const frameInfo = {
-                imageBitmap,
-                metadata,
-                processedAt: Date.now()
-            };
+            // Assemble all chunks into one ArrayBuffer
+            const totalSize = videoData.chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
+            const assembledVideo = new Uint8Array(totalSize);
+            let offset = 0;
+
+            for (const chunk of videoData.chunks) {
+                assembledVideo.set(new Uint8Array(chunk), offset);
+                offset += chunk.byteLength;
+            }
+
+            // Create video blob
+            const videoBlob = new Blob([assembledVideo], { type: 'video/webm' });
+            const videoUrl = URL.createObjectURL(videoBlob);
 
             // Calculate latency
-            const latency = Date.now() - metadata.timestamp;
+            const latency = Date.now() - videoData.metadata.timestamp;
             this.latencySum += latency;
             this.latencyCount++;
 
-            // 🎯 Smart queue management - drop old frames aggressively
-            if (this.frameQueue.length >= this.maxQueueSize) {
-                // Drop oldest frames to maintain low latency
-                while (this.frameQueue.length >= this.maxQueueSize) {
-                    const oldFrame = this.frameQueue.shift();
-                    if (oldFrame.imageBitmap) {
-                        oldFrame.imageBitmap.close();
-                    }
-                    this.frameDrops++;
-                }
+            const processedVideo = {
+                url: videoUrl,
+                blob: videoBlob,
+                metadata: videoData.metadata,
+                clipNumber: clipNumber,
+                latency: latency,
+                processedAt: Date.now()
+            };
+
+            // Add to playback buffer
+            this.playbackBuffer.push(processedVideo);
+            this.clipsReceived++;
+
+            console.log(`✅ Video clip #${clipNumber} ready for playback (${latency}ms latency)`);
+
+            // Clean up
+            this.pendingVideoData.delete(clipNumber);
+
+            // Start playback if we have enough buffer
+            if (this.isBuffering && this.playbackBuffer.length >= this.bufferThreshold) {
+                console.log("🎬 Starting video playback");
+                this.isBuffering = false;
+                this.playNextVideo();
             }
 
-            // Add new frame
-            this.frameQueue.push(frameInfo);
-
-            // 🏃‍♂️ Immediate rendering attempt (don't wait for RAF)
-            if (!this.renderingFrame && this.frameQueue.length > 0) {
-                this.renderNextFrame();
+            // Manage buffer size
+            while (this.playbackBuffer.length > this.bufferSize) {
+                const oldVideo = this.playbackBuffer.shift();
+                URL.revokeObjectURL(oldVideo.url);
             }
 
-        } catch (err) {
-            console.error("Frame processing error:", err);
+            this.updatePerformanceStats();
+
+        } catch (error) {
+            console.error(`❌ Failed to assemble video clip #${clipNumber}:`, error);
+            this.pendingVideoData.delete(clipNumber);
         }
     }
 
-    startFrameRenderer() {
-        this.isPlaying = true;
-        
-        // 🏃‍♂️ High-performance frame renderer with immediate processing
-        const renderFrame = (currentTime) => {
-            if (!this.isPlaying) return;
-
-            // 🚀 Process multiple frames per cycle if available (catch up)
-            let framesProcessed = 0;
-            const maxFramesPerCycle = 3; // Process up to 3 frames per RAF cycle
-            
-            while (this.frameQueue.length > 0 && framesProcessed < maxFramesPerCycle) {
-                this.renderNextFrame();
-                framesProcessed++;
-            }
-
-            // Continue frame processing loop
-            requestAnimationFrame(renderFrame);
-        };
-
-        // Start the rendering loop immediately
-        requestAnimationFrame(renderFrame);
-        
-        // 🎯 Also setup a high-frequency interval for ultra-low latency
-        this.highFrequencyTimer = setInterval(() => {
-            if (this.frameQueue.length > 0 && !this.renderingFrame) {
-                this.renderNextFrame();
-            }
-        }, 16); // ~60 FPS interval for immediate processing
-    }
-
-    renderNextFrame() {
-        if (this.frameQueue.length === 0 || this.renderingFrame) {
-            if (this.frameQueue.length === 0) {
-                this.updateStatus("Buffering frames...", "warning");
-            }
+    async playNextVideo() {
+        if (this.playbackBuffer.length === 0) {
+            console.log("📋 No videos in buffer, buffering...");
+            this.isBuffering = true;
+            this.updateStatus("Buffering video clips...", "warning");
             return;
         }
 
-        this.renderingFrame = true; // Prevent overlapping renders
-
-        // 🎯 Always take the NEWEST frame for lowest latency
-        let frame;
-        if (this.frameQueue.length > 1) {
-            // Drop intermediate frames and take the newest
-            while (this.frameQueue.length > 1) {
-                const oldFrame = this.frameQueue.shift();
-                if (oldFrame.imageBitmap) {
-                    oldFrame.imageBitmap.close();
-                }
-                this.frameDrops++;
-            }
-        }
-        
-        frame = this.frameQueue.shift();
-        if (!frame || !frame.imageBitmap) {
-            this.renderingFrame = false;
-            return;
-        }
+        const video = this.playbackBuffer.shift();
+        this.clipsPlayed++;
 
         try {
-            // 🚀 Ultra-fast canvas rendering
-            this.context.drawImage(frame.imageBitmap, 0, 0, this.canvas.width, this.canvas.height);
+            // Load new video
+            this.videoElement.src = video.url;
             
-            // Clean up ImageBitmap immediately
-            frame.imageBitmap.close();
-            
-            this.frameCounter++;
-            this.fpsCounter++;
-            
-            // Calculate real-time latency
-            const totalLatency = Date.now() - frame.metadata.timestamp;
-            const processingLatency = frame.processedAt - frame.metadata.timestamp;
-            
-            // Update status with performance info
+            // Update status
             this.updateStatus(
-                `🎥 Live Stream - Frame #${frame.metadata.frameNumber} | ` +
-                `${totalLatency}ms total latency | ${this.frameQueue.length} queued | ` +
-                `${this.frameDrops} dropped`, 
+                `🎥 Playing clip #${video.clipNumber} | ${video.latency}ms latency | ${this.playbackBuffer.length} buffered`, 
                 "success"
             );
-            
-            // Performance stats update (less frequent)
-            this.updatePerformanceStats();
-            
-        } catch (err) {
-            console.error("Render error:", err);
-            if (frame.imageBitmap) {
-                frame.imageBitmap.close();
-            }
-        } finally {
-            this.renderingFrame = false;
+
+            // Play the video
+            await this.videoElement.play();
+
+            console.log(`▶️ Playing video clip #${video.clipNumber}`);
+
+            // Clean up old URL after a delay to ensure playback started
+            setTimeout(() => {
+                URL.revokeObjectURL(video.url);
+            }, 1000);
+
+        } catch (error) {
+            console.error(`❌ Failed to play video clip #${video.clipNumber}:`, error);
+            // Try next video
+            this.playNextVideo();
         }
     }
 
     updatePerformanceStats() {
         const now = Date.now();
-        if (now - this.lastFpsTime >= 2000) { // Update every 2 seconds
-            const actualFPS = this.fpsCounter / 2; // Adjust for 2-second interval
+        if (now - this.lastFpsTime >= 3000) { // Update every 3 seconds
             const avgLatency = this.latencyCount > 0 ? (this.latencySum / this.latencyCount).toFixed(1) : 0;
+            const bufferHealth = this.playbackBuffer.length;
             
-            console.log(`🚀 Viewer Performance: ${actualFPS.toFixed(1)} FPS | ` +
-                       `${avgLatency}ms avg latency | ${this.frameQueue.length} queued | ` +
-                       `${this.frameDrops} frames dropped for speed`);
+            console.log(`📊 Viewer Performance: ${avgLatency}ms avg latency | ` +
+                       `${bufferHealth} clips buffered | ${this.clipsReceived} received | ${this.clipsPlayed} played`);
             
-            // Send enhanced performance data to server
+            // Send performance data to server
             if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
                 this.websocket.send(JSON.stringify({
-                    type: 'performance_stats',
-                    fps: actualFPS,
-                    latency: parseFloat(avgLatency),
-                    queueSize: this.frameQueue.length,
-                    frameDrops: this.frameDrops,
+                    type: 'viewer_performance',
+                    avgLatency: parseFloat(avgLatency),
+                    bufferHealth: bufferHealth,
+                    clipsReceived: this.clipsReceived,
+                    clipsPlayed: this.clipsPlayed,
                     timestamp: now
                 }));
             }
             
-            // 🎯 Dynamic performance adjustment
-            if (parseFloat(avgLatency) > 200) { // High latency
-                this.maxQueueSize = Math.max(1, this.maxQueueSize - 1);
-                console.log(`🎯 Reduced queue size to ${this.maxQueueSize} for lower latency`);
-            } else if (parseFloat(avgLatency) < 50 && this.frameDrops < 10) { // Low latency
-                this.maxQueueSize = Math.min(5, this.maxQueueSize + 1);
-                console.log(`🚀 Increased queue size to ${this.maxQueueSize} for smoother playback`);
-            }
-            
             // Reset counters
-            this.fpsCounter = 0;
             this.lastFpsTime = now;
             this.latencySum = 0;
             this.latencyCount = 0;
-            this.frameDrops = 0;
         }
+        
     }
 
     updateStatus(text, type = 'info') {
@@ -289,46 +294,43 @@ class EnhancedVideoViewer {
     reset() {
         this.isPlaying = false;
 
-        // Clear high-frequency timer
-        if (this.highFrequencyTimer) {
-            clearInterval(this.highFrequencyTimer);
-            this.highFrequencyTimer = null;
-        }
-
         if (this.websocket) {
             this.websocket.close();
             this.websocket = null;
         }
 
-        // Clean up frame queue
-        this.frameQueue.forEach(frame => {
-            if (frame.imageBitmap) {
-                frame.imageBitmap.close();
-            }
+        // Clean up video buffers
+        this.playbackBuffer.forEach(video => {
+            URL.revokeObjectURL(video.url);
         });
-        this.frameQueue = [];
+        this.playbackBuffer = [];
+        this.pendingVideoData.clear();
 
-        // Clear canvas
-        if (this.context && this.canvas) {
-            this.context.clearRect(0, 0, this.canvas.width, this.canvas.height);
-        }
+        // Stop video playback
+        this.videoElement.pause();
+        this.videoElement.src = '';
 
         // Reset counters
         this.frameCounter = 0;
-        this.fpsCounter = 0;
+        this.clipsReceived = 0;
+        this.clipsPlayed = 0;
         this.latencySum = 0;
         this.latencyCount = 0;
-        this.frameDrops = 0;
-        this.renderingFrame = false;
+        this.isBuffering = true;
 
         this.updateStatus("Reset", "secondary");
     }
 
-    // Dynamic quality adjustment
+    // Performance adjustment method for compatibility
     adjustFrameRate(fps) {
-        this.maxFrameRate = Math.max(15, Math.min(120, fps)); // Increased max to 120 FPS
-        this.frameInterval = 1000 / this.maxFrameRate;
-        console.log(`🎯 Viewer frame rate adjusted to ${this.maxFrameRate} FPS for ultra-low latency`);
+        // For video clips, we don't adjust frame rate but buffer size
+        if (fps < 20) {
+            this.bufferThreshold = Math.max(1, this.bufferThreshold - 1);
+            console.log(`🎯 Reduced buffer threshold to ${this.bufferThreshold} for lower latency`);
+        } else if (fps > 40) {
+            this.bufferThreshold = Math.min(4, this.bufferThreshold + 1);
+            console.log(`🚀 Increased buffer threshold to ${this.bufferThreshold} for smoother playback`);
+        }
     }
 }
   

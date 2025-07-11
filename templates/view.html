@@ -68,13 +68,13 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="/static/js/video-viewer.js"></script>
+<script src="/static/js/video-viewer-http.js"></script>
 <script src="/static/js/main.js"></script>
 <script>
 document.addEventListener('DOMContentLoaded', function() {
     const cameraToken = '{{ camera.camera_token }}';
     if (cameraToken) {
-        window.videoViewer = new EnhancedVideoViewer(cameraToken);
+        window.videoViewer = new HTTPVideoViewer(cameraToken);
         window.videoViewer.connect();
     }
 });
@@ -85,12 +85,14 @@ function toggleDebugInfo() {
     
     if (debugDiv.style.display === 'none') {
         debugDiv.style.display = 'block';
-        // Update debug content
+        // Update debug content with HTTP polling info
         debugContent.innerHTML = `
             <p>Camera Token: {{ camera.camera_token }}</p>
-            <p>Connection State: ${window.videoViewer ? window.videoViewer.ws?.readyState : 'Not initialized'}</p>
-            <p>Current Mode: ${window.videoViewer ? window.videoViewer.currentMode : 'Unknown'}</p>
-            <p>Reconnect Attempts: ${window.videoViewer ? window.videoViewer.reconnectAttempts : 0}</p>
+            <p>Polling Mode: HTTP (every ${window.videoViewer ? window.videoViewer.pollingInterval : 'N/A'}ms)</p>
+            <p>Buffer Size: ${window.videoViewer ? window.videoViewer.videoQueue.length : 0}</p>
+            <p>Clips Received: ${window.videoViewer ? window.videoViewer.clipsReceived : 0}</p>
+            <p>Clips Played: ${window.videoViewer ? window.videoViewer.clipsPlayed : 0}</p>
+            <p>Is Buffering: ${window.videoViewer ? window.videoViewer.isBuffering : 'Unknown'}</p>
         `;
     } else {
         debugDiv.style.display = 'none';
