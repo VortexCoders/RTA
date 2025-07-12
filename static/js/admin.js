@@ -47,10 +47,11 @@ function addCameraToTable(camera) {
         <td>${camera.id}</td>
         <td>${camera.name || 'N/A'}</td>
         <td>${camera.location || 'N/A'}</td>
+        <td>${camera.phone_number || 'Not provided'}</td>
         <td>
             <a href="${camera.public_url}" target="_blank" class="btn btn-sm btn-primary">View</a>
             <a href="${camera.camera_url}" target="_blank" class="btn btn-sm btn-secondary">Stream</a>
-            <button onclick="deleteCamera(${camera.id})" class="btn btn-sm btn-danger">Delete</button>
+            <button data-camera-id="${camera.id}" class="btn btn-sm btn-danger delete-camera-btn">Delete</button>
         </td>
     `;
     tableBody.appendChild(row);
@@ -108,6 +109,19 @@ async function deleteCamera(cameraId) {
         showAlert('Error deleting camera', 'error');
     }
 }
+
+// Event delegation for delete buttons
+document.addEventListener('DOMContentLoaded', function() {
+    document.addEventListener('click', function(e) {
+        if (e.target.classList.contains('delete-camera-btn')) {
+            e.preventDefault();
+            const cameraId = e.target.getAttribute('data-camera-id');
+            if (cameraId) {
+                deleteCamera(cameraId);
+            }
+        }
+    });
+});
 
 // Auto-generate slug from name
 function generateSlug() {

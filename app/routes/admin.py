@@ -11,13 +11,14 @@ templates = Jinja2Templates(directory="templates")
 
 @router.get("/", response_class=HTMLResponse)
 async def admin_panel(request: Request, username: str = Depends(authenticate_admin), db: Session = Depends(get_db)):
-    cameras = db.query(Camera).all()
+    cameras = db.query(Camera).filter(Camera.is_active == True).all()
     return templates.TemplateResponse("admin.html", {"request": request, "cameras": cameras})
 
 @router.post("/camera")
 async def create_camera(
     name: str = Form(...),
     location: str = Form(...),
+    phone_number: str = Form(...),
     is_residential: bool = Form(False),
     public_slug: str = Form(""),
     username: str = Depends(authenticate_admin),
@@ -35,6 +36,7 @@ async def create_camera(
     camera = Camera(
         name=name,
         location=location,
+        phone_number=phone_number,
         is_residential=is_residential,
         public_slug=public_slug,
         camera_token=generate_camera_token()
@@ -45,6 +47,9 @@ async def create_camera(
     
     return JSONResponse({
         "id": camera.id,
+        "name": camera.name,
+        "location": camera.location,
+        "phone_number": camera.phone_number,
         "public_url": f"/view/{camera.public_slug}",
         "camera_url": f"/camera/{camera.camera_token}"
     })
@@ -55,9 +60,10 @@ async def delete_camera(camera_id: int, username: str = Depends(authenticate_adm
     if not camera:
         raise HTTPException(status_code=404, detail="Camera not found")
     
-    camera.is_active = False
+    # Actually delete the camera from the database
+    db.delete(camera)
     db.commit()
-    return {"message": "Camera deleted"}
+    return {"message": "Camera permanently deleted"}
 
 @router.get("/dashboard", response_class=HTMLResponse)
 async def processing_dashboard(request: Request, username: str = Depends(authenticate_admin)):

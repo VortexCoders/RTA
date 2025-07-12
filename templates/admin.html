@@ -14,12 +14,17 @@
     <form id="camera-form" onsubmit="createCamera(event)">
         <div class="form-group">
             <label for="name">Camera Name:</label>
-            <input type="text" id="name" name="name" class="form-control" required placeholder="e.g., Main Entrance Camera">
+            <input type="text" id="name" name="name" class="form-control" required placeholder="e.g., Maharajgunj Chowk Camera">
         </div>
         
         <div class="form-group">
             <label for="location">Location:</label>
-            <input type="text" id="location" name="location" class="form-control" required placeholder="e.g., Downtown Plaza, Building A">
+            <input type="text" id="location" name="location" class="form-control" required placeholder="e.g., American Embassy, Maharajgunj">
+        </div>
+        
+        <div class="form-group">
+            <label for="phone_number">Phone Number:</label>
+            <input type="tel" id="phone_number" name="phone_number" class="form-control" required placeholder="e.g., +977 9854123768">
         </div>
         
         <div class="form-group">
@@ -45,11 +50,7 @@
     <div class="cameras-grid">
         {% for camera in cameras %}
         <div class="camera-card">
-            <h3>{{ camera.name }} 
-                {% if not camera.is_active %}
-                    <span style="color: #e74c3c;">(Deleted)</span>
-                {% endif %}
-            </h3>
+            <h3>{{ camera.name }}</h3>
             <div class="camera-info">
                 <p><strong>Location:</strong> {{ camera.location }}
                     {% if camera.is_residential %}
@@ -58,15 +59,14 @@
                         <span class="badge badge-commercial">Commercial</span>
                     {% endif %}
                 </p>
+                <p><strong>Phone Number:</strong> {{ camera.phone_number }}</p>
                 <p><strong>Public URL:</strong> <a href="/view/{{ camera.public_slug }}" target="_blank">/view/{{ camera.public_slug }}</a></p>
                 <p><strong>Camera URL:</strong> <a href="/camera/{{ camera.camera_token }}" target="_blank">/camera/{{ camera.camera_token }}</a></p>
                 <p><strong>Created:</strong> {{ camera.created_at.strftime('%Y-%m-%d %H:%M') }}</p>
             </div>
-            {% if camera.is_active %}
             <div class="controls">
-                <button onclick="deleteCamera({{ camera.id }})" class="btn btn-danger">Delete Camera</button>
+                <button data-camera-id="{{ camera.id }}" class="btn btn-danger delete-camera-btn">Delete Camera</button>
             </div>
-            {% endif %}
         </div>
         {% endfor %}
     </div>

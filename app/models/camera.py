@@ -8,6 +8,7 @@ class Camera(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, index=True)
     location = Column(String, index=True)
+    phone_number = Column(String, index=True)
     is_residential = Column(Boolean, default=False)
     public_slug = Column(String, unique=True, index=True)
     camera_token = Column(String, unique=True, index=True)
