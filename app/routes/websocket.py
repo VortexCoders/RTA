@@ -27,7 +27,7 @@ processing_stats = {
 
 # Processed video queues for each camera (max 10 items)
 processed_video_queues: Dict[str, List[Dict[str, Any]]] = {}
-MAX_QUEUE_SIZE = 3
+MAX_QUEUE_SIZE = 2
 
 # Background worker management
 _background_worker_started = False
@@ -59,14 +59,15 @@ async def video_processing_worker(worker_id: int = 0):
 async def process_video_clip(task, worker_id: int = 0):
     """Process a single video clip with YOLO inference"""
     token, video_data, clip_number = task['token'], task['video_data'], task['clip_number']
+    camera_id = task.get('camera_id', token)  # Use camera_id if available, fallback to token
     
     try:
         start_time = time.perf_counter()
         
         print(f"🧠 Worker {worker_id} processing video clip #{clip_number} for {token} ({len(video_data) / 1024 / 1024:.2f} MB)")
         
-        # Run YOLO inference on the video clip
-        processed_video_bytes = await run_yolo_on_webm(video_data)
+        # Run YOLO inference on the video clip with camera_id for alerts
+        processed_video_bytes = await run_yolo_on_webm(video_data, camera_id)
         
         processing_time = time.perf_counter() - start_time
         processing_stats['clips_processed'] += 1
@@ -211,7 +212,8 @@ async def finalize_video_clip(token: str, clip_number: int):
             'token': token,
             'video_data': video_bytes,
             'clip_number': clip_number,
-            'metadata': video_data['metadata']
+            'metadata': video_data['metadata'],
+            'camera_id': token  # Use token as camera_id for now, could be improved with actual camera.id
         }
         
         await video_processing_queue.put(task)

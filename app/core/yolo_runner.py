@@ -4,6 +4,7 @@ import cv2
 import torch
 from io import BytesIO
 from ultralytics import YOLO
+from .alerts import send_alert_message, format_detection_summary
 
 # Load optimized YOLO model
 model_path = "weights_v11.pt"
@@ -15,7 +16,7 @@ if torch.cuda.is_available():
 else:
     print("⚠️ YOLO model loaded on CPU")
 
-async def run_yolo_on_webm(webm_bytes: bytes) -> bytes:
+async def run_yolo_on_webm(webm_bytes: bytes, camera_id: str = "unknown") -> bytes:
     """Run YOLO object detection on a WebM video clip and return annotated video."""
     def _process() -> bytes:
         t0 = time.perf_counter()
@@ -80,7 +81,7 @@ async def run_yolo_on_webm(webm_bytes: bytes) -> bytes:
                 detections = detection_map.get(nearest_idx, [])
 
                 for (xyxy, cls_id, conf) in detections:
-                    if conf >= 0.5:
+                    if conf >= 0.75:
                         x1, y1, x2, y2 = map(int, xyxy)
                         label = f"{yolo_model.names[int(cls_id)]} {conf:.2f}"
                         cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
@@ -101,6 +102,35 @@ async def run_yolo_on_webm(webm_bytes: bytes) -> bytes:
             output.close()
             output_buffer.seek(0)
             out_bytes = output_buffer.read()
+
+            # Check if we have any high-confidence detections for alerts
+            all_detections = []
+            for frame_detections in detection_map.values():
+                for detection in frame_detections:
+                    bbox, class_id, confidence = detection
+                    if confidence >= 0.50:  # Same threshold as drawing
+                        all_detections.append(detection)
+
+            # Send alert if detections found
+            if all_detections:
+                try:
+                    # Format detection data for alert
+                    alert_data = format_detection_summary(all_detections)
+                    
+                    # Update class names with actual YOLO model names
+                    for detection in alert_data['detections']:
+                        detection['class_name'] = yolo_model.names[int(detection['class_id'])]
+                    
+                    # Update detected classes list
+                    alert_data['detected_classes'] = list(set(
+                        yolo_model.names[int(det['class_id'])] for det in alert_data['detections']
+                    ))
+                    
+                    # Send alert asynchronously (fire and forget)
+                    asyncio.create_task(send_alert_message(camera_id, alert_data, out_bytes))
+                    
+                except Exception as alert_error:
+                    print(f"⚠️ Alert processing error: {alert_error}")
 
             total_time = time.perf_counter() - t0
             fps_eff = frames_done / total_time if total_time else 0
