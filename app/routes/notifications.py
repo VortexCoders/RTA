@@ -4,11 +4,33 @@ from sqlalchemy.orm import Session
 from pywebpush import webpush, WebPushException
 from app.core.database import get_db
 from app.core.security import VAPID_PRIVATE_KEY, VAPID_CLAIMS
+from app.core.tingtingapi import TingTingAPIClient
 from app.models.camera import Camera, Subscription
 
 router = APIRouter()
 
 @router.post("/subscribe/{camera_id}")
+async def subscribe_to_notifications(
+    camera_id: int,
+    subscription_data: dict,
+    db: Session = Depends(get_db)
+):
+    camera = db.query(Camera).filter(Camera.id == camera_id).first()
+    if not camera:
+        raise HTTPException(status_code=404, detail="Camera not found")
+    
+    subscription = Subscription(
+        camera_id=camera_id,
+        endpoint=subscription_data.get("endpoint"),
+        p256dh=subscription_data.get("keys", {}).get("p256dh"),
+        auth=subscription_data.get("keys", {}).get("auth")
+    )
+    db.add(subscription)
+    db.commit()
+    
+    return {"message": "Subscribed successfully"}
+
+router.post("/subscribe/{camera_id}")
 async def subscribe_to_notifications(
     camera_id: int,
     subscription_data: dict,

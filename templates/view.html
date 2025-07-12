@@ -40,11 +40,34 @@
 </div>
 
 <div class="notification-section">
-    <h3>🔔 Get Notifications</h3>
-    <p>Subscribe to receive push notifications when motion is detected on this camera.</p>
-    <button id="subscribe-btn" onclick="subscribeToPushNotifications({{ camera.id }})" class="btn btn-success">
-        Subscribe to Notifications
-    </button>
+    <h3>🔔 सुरक्षा अलर्ट पाउनुहोस् / Get Security Alerts</h3>
+    <p>यस क्यामेराबाट खतरनाक जनावर पत्ता लागेमा तत्काल SMS अलर्ट पाउन आफ्नो फोन नम्बर दर्ता गर्नुहोस्।</p>
+    <p>Register your phone number to receive instant SMS alerts when dangerous animals are detected by this camera.</p>
+    
+    <div class="phone-subscription">
+        <div class="input-group">
+            <input 
+                type="tel" 
+                id="phone-input" 
+                placeholder="98XXXXXXXX (10 अंकको नम्बर)" 
+                maxlength="10"
+                pattern="98[0-9]{8}"
+                class="form-control"
+                style="flex: 1; padding: 12px; border: 2px solid #ddd; border-radius: 8px; font-size: 16px;"
+            >
+            <button 
+                id="subscribe-phone-btn" 
+                class="btn btn-success"
+                style="margin-left: 10px; padding: 12px 20px;"
+            >
+                📱 सब्स्क्राइब गर्नुहोस् / Subscribe
+            </button>
+        </div>
+        <small style="color: #666; margin-top: 5px; display: block;">
+            ⚠️ केवल नेपाली नम्बर (98 बाट सुरु हुने) मात्र स्वीकार गरिन्छ / Only Nepali numbers starting with 98 are accepted
+        </small>
+        <div id="subscription-status" style="margin-top: 10px; display: none;"></div>
+    </div>
 </div>
 
 <div style="background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px); border-radius: 15px; padding: 25px; margin-top: 20px; box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);">
@@ -55,7 +78,7 @@
         {% if camera.is_residential %}
             Residential Area
         {% else %}
-            Commercial Area
+            Wild Life
         {% endif %}
     </p>
     <p><strong>Share this page:</strong> 
@@ -102,5 +125,109 @@ function toggleDebugInfo() {
 function subscribeToPushNotifications(cameraId) {
     enableNotifications(cameraId);
 }
+
+async function subscribeToPhoneAlerts(cameraId) {
+    const phoneInput = document.getElementById('phone-input');
+    const statusDiv = document.getElementById('subscription-status');
+    const subscribeBtn = document.getElementById('subscribe-phone-btn');
+    
+    const phoneNumber = phoneInput.value.trim();
+    
+    // Validate phone number format
+    const phonePattern = /^9\d{9}$/;
+    if (!phonePattern.test(phoneNumber)) {
+        showSubscriptionStatus('❌ कृपया मान्य नेपाली फोन नम्बर प्रविष्ट गर्नुहोस् (9 बाट सुरु हुने 10 अंकको)', 'error');
+        return;
+    }
+    
+    // Disable button and show loading
+    subscribeBtn.disabled = true;
+    subscribeBtn.innerHTML = '⏳ सब्स्क्राइब गर्दै... / Subscribing...';
+    
+    try {
+        const response = await fetch(`/notifications/subscribe-phone/${cameraId}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                phone_number: phoneNumber
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok) {
+            showSubscriptionStatus(`✅ ${data.message}`, 'success');
+            phoneInput.value = ''; // Clear input
+            
+            // Update button text
+            subscribeBtn.innerHTML = '✅ सब्स्क्राइब भयो / Subscribed';
+            setTimeout(() => {
+                subscribeBtn.innerHTML = '📱 सब्स्क्राइब गर्नुहोस् / Subscribe';
+                subscribeBtn.disabled = false;
+            }, 3000);
+        } else {
+            showSubscriptionStatus(`❌ त्रुटि: ${data.detail}`, 'error');
+            subscribeBtn.disabled = false;
+            subscribeBtn.innerHTML = '📱 सब्स्क्राइब गर्नुहोस् / Subscribe';
+        }
+    } catch (error) {
+        console.error('Subscription error:', error);
+        showSubscriptionStatus('❌ नेटवर्क त्रुटि / Network error', 'error');
+        subscribeBtn.disabled = false;
+        subscribeBtn.innerHTML = '📱 सब्स्क्राइब गर्नुहोस् / Subscribe';
+    }
+}
+
+function showSubscriptionStatus(message, type) {
+    const statusDiv = document.getElementById('subscription-status');
+    statusDiv.style.display = 'block';
+    statusDiv.innerHTML = message;
+    statusDiv.className = type === 'success' ? 'alert alert-success' : 'alert alert-error';
+    
+    // Hide after 5 seconds
+    setTimeout(() => {
+        statusDiv.style.display = 'none';
+    }, 5000);
+}
+
+// Add phone number formatting and validation
+document.addEventListener('DOMContentLoaded', function() {
+    const phoneInput = document.getElementById('phone-input');
+    
+    if (phoneInput) {
+        phoneInput.addEventListener('input', function(e) {
+            // Only allow numbers
+            this.value = this.value.replace(/[^0-9]/g, '');
+            
+            // Limit to 10 digits
+            if (this.value.length > 10) {
+                this.value = this.value.slice(0, 10);
+            }
+            
+            // Visual feedback for valid format
+            const phonePattern = /^98\d{8}$/;
+            if (phonePattern.test(this.value)) {
+                this.style.borderColor = '#28a745';
+                this.style.backgroundColor = '#f8fff9';
+            } else if (this.value.length > 0) {
+                this.style.borderColor = '#dc3545';
+                this.style.backgroundColor = '#fff8f8';
+            } else {
+                this.style.borderColor = '#ddd';
+                this.style.backgroundColor = '#fff';
+            }
+        });
+        
+        phoneInput.addEventListener('keypress', function(e) {
+            // Allow enter key to submit
+            if (e.key === 'Enter') {
+                const cameraId = '{{ camera.id }}';
+                subscribeToPhoneAlerts(parseInt(cameraId));
+            }
+        });
+    }
+});
 </script>
 {% endblock %}

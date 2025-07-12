@@ -27,7 +27,7 @@ processing_stats = {
 
 # Processed video queues for each camera (max 10 items)
 processed_video_queues: Dict[str, List[Dict[str, Any]]] = {}
-MAX_QUEUE_SIZE = 2
+MAX_QUEUE_SIZE = 10
 
 # Background worker management
 _background_worker_started = False

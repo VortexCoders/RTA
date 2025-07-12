@@ -4,6 +4,14 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+
+import logging
+
+logging.basicConfig(
+    level=logging.DEBUG,  # or INFO, WARNING, etc.
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+)
+
 # Import route modules
 from app.routes import main, admin, camera, websocket, notifications
 from app.core.database import engine
