@@ -3,74 +3,58 @@ class HTTPVideoViewer {
         this.cameraToken = cameraToken;
         this.videoElement = document.getElementById('stream-video');
         this.statusElement = document.getElementById('connection-status');
-        
-        // Polling settings
+
+        // Polling
         this.isPolling = false;
-        this.pollingInterval = 5000; // Poll every 5 seconds
+        this.pollingInterval = 5000;
         this.pollingTimer = null;
-        
-        // Video buffering
+
+        // Buffering
         this.videoQueue = [];
-        this.isPlaying = false;
-        this.currentVideoIndex = 0;
-        this.bufferSize = 3; // Keep 3 video clips buffered
-        this.bufferThreshold = 2; // Start playing when we have 2 clips ready
+        this.bufferSize = 3;
+        this.bufferThreshold = 2;
         this.isBuffering = true;
-        
-        // Performance monitoring
+
+        // Performance
         this.clipsReceived = 0;
         this.clipsPlayed = 0;
         this.latencySum = 0;
         this.latencyCount = 0;
         this.lastClipNumber = null;
-        
-        // URL cache for clips
-        this.urlCache = new Map();
+
+        // Warmup
+        this.warmupPolls = 3; // how many rapid polls to run initially
     }
 
     connect() {
         this.updateStatus("Connecting...", "info");
         this.setupVideoElement();
         this.startPolling();
+
+        // Run initial warm-up polls to accelerate buffer fill
+        for (let i = 0; i < this.warmupPolls; i++) {
+            this.pollForNextVideo();
+        }
     }
 
     setupVideoElement() {
-        // Ensure video element is ready for continuous playback
-        this.videoElement.style.width = '100%';
-        this.videoElement.style.height = 'auto';
-        this.videoElement.style.maxWidth = '800px';
-        this.videoElement.style.border = '1px solid #ddd';
-        this.videoElement.muted = true; // Start muted for autoplay
-        this.videoElement.controls = true;
-        this.videoElement.preload = 'auto';
-        
-        // Handle video events
-        this.videoElement.addEventListener('ended', () => {
-            this.playNextVideo();
-        });
-        
-        this.videoElement.addEventListener('error', (e) => {
-            console.error("Video playback error:", e);
-            this.playNextVideo(); // Try to recover
-        });
-        
-        this.videoElement.addEventListener('loadstart', () => {
-            console.log("🎬 Loading new video clip...");
-        });
-        
-        this.videoElement.addEventListener('canplay', () => {
-            console.log("✅ Video clip ready to play");
-        });
+        const el = this.videoElement;
+        el.style.width = '100%';
+        el.style.maxWidth = '800px';
+        el.muted = true;
+        el.controls = true;
+        el.preload = 'auto';
+
+        el.addEventListener('ended', () => this.playNextVideo());
+        el.addEventListener('error', () => this.playNextVideo());
+        el.addEventListener('loadstart', () => console.log("🎬 Loading new video..."));
+        el.addEventListener('canplay', () => console.log("✅ Ready to play"));
     }
 
     startPolling() {
         this.isPolling = true;
-        this.updateStatus("Connected - Polling for 10s video clips", "success");
-        
-        // Start immediate poll
-        this.pollForNextVideo();
-        
-        // Set up regular polling
+        this.updateStatus("Connected - Polling for clips...", "success");
+
         this.pollingTimer = setInterval(() => {
             this.pollForNextVideo();
         }, this.pollingInterval);
@@ -80,149 +64,120 @@ class HTTPVideoViewer {
         try {
             const response = await fetch(`/api/camera/${this.cameraToken}/next-video`);
             const data = await response.json();
-            
-            if (data.error) {
-                console.error("Polling error:", data.error);
+
+            if (data?.error) {
                 this.updateStatus(data.error, "danger");
                 return;
             }
-            
-            if (data.video && data.video.available) {
+
+            if (data.video?.available) {
                 const clipNumber = data.video.clip_number;
-                
-                // Check if this is a new clip
+
                 if (this.lastClipNumber !== clipNumber) {
-                    console.log(`🎬 New clip available: #${clipNumber}`);
+                    console.log(`🎬 New clip: #${clipNumber}`);
                     await this.fetchAndQueueVideo(clipNumber, data.video);
                     this.lastClipNumber = clipNumber;
                     this.clipsReceived++;
+                    this.adjustPollingRate(); // Early rate adjustment
                 }
-                
-                // Update status with queue info
-                this.updateStatus(
-                    `🎥 Buffering clips | Queue: ${data.queue_size} | Buffered: ${this.videoQueue.length}`,
-                    "success"
-                );
+
+                this.updateStatus(`🎥 Queue: ${data.queue_size} | Buffered: ${this.videoQueue.length}`, "success");
             } else {
                 this.updateStatus("⏳ Waiting for processed videos...", "warning");
             }
-            
-        } catch (error) {
-            console.error("Polling error:", error);
+
+        } catch (err) {
+            console.error("Polling error:", err);
             this.updateStatus("Polling error", "danger");
         }
     }
 
     async fetchAndQueueVideo(clipNumber, metadata) {
+        if (this.videoQueue.some(v => v.clipNumber === clipNumber)) {
+            console.log(`📋 Clip #${clipNumber} already buffered`);
+            return;
+        }
+
         try {
-            // Check if already in queue
-            if (this.videoQueue.some(v => v.clipNumber === clipNumber)) {
-                console.log(`📋 Clip #${clipNumber} already in queue`);
-                return;
-            }
-            
-            console.log(`📥 Fetching clip #${clipNumber}...`);
-            
-            const videoResponse = await fetch(`/api/camera/${this.cameraToken}/video/${clipNumber}`);
-            if (!videoResponse.ok) {
-                throw new Error(`Failed to fetch video: ${videoResponse.status}`);
-            }
-            
-            const videoBlob = await videoResponse.blob();
-            const videoUrl = URL.createObjectURL(videoBlob);
-            
-            // Calculate latency
+            const res = await fetch(`/api/camera/${this.cameraToken}/video/${clipNumber}`);
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const blob = await res.blob();
+            const url = URL.createObjectURL(blob);
             const latency = Date.now() - metadata.timestamp;
+
             this.latencySum += latency;
             this.latencyCount++;
-            
-            const videoItem = {
-                url: videoUrl,
-                blob: videoBlob,
-                clipNumber: clipNumber,
-                metadata: metadata,
-                latency: latency,
-                fetchedAt: Date.now()
-            };
-            
-            // Add to queue
-            this.videoQueue.push(videoItem);
-            console.log(`✅ Clip #${clipNumber} added to queue (${latency}ms latency)`);
-            
-            // Manage buffer size
+
+            this.videoQueue.push({ url, blob, clipNumber, latency });
+            console.log(`✅ Fetched clip #${clipNumber} (${latency}ms)`);
+
             while (this.videoQueue.length > this.bufferSize) {
-                const oldVideo = this.videoQueue.shift();
-                URL.revokeObjectURL(oldVideo.url);
-                console.log(`📤 Removed old clip #${oldVideo.clipNumber} from buffer`);
+                const old = this.videoQueue.shift();
+                URL.revokeObjectURL(old.url);
+                console.log(`♻️ Removed old clip #${old.clipNumber}`);
             }
-            
-            // Start playback if we have enough buffer
+
             if (this.isBuffering && this.videoQueue.length >= this.bufferThreshold) {
-                console.log("🎬 Starting video playback");
                 this.isBuffering = false;
                 this.playNextVideo();
             }
-            
-        } catch (error) {
-            console.error(`❌ Failed to fetch clip #${clipNumber}:`, error);
+
+        } catch (err) {
+            console.error(`❌ Fetch error clip #${clipNumber}:`, err);
         }
+    }
+
+    async waitUntilPlayable(timeout = 3000) {
+        return new Promise((resolve, reject) => {
+            const start = Date.now();
+            const check = () => {
+                if (this.videoElement.readyState >= 3) return resolve();
+                if (Date.now() - start > timeout) return reject("Timed out waiting for canplay");
+                setTimeout(check, 100);
+            };
+            check();
+        });
     }
 
     async playNextVideo() {
         if (this.videoQueue.length === 0) {
-            console.log("📋 No videos in buffer, buffering...");
             this.isBuffering = true;
-            this.updateStatus("Buffering video clips...", "warning");
-            
-            // Try to fetch immediately if buffer is empty
+            this.updateStatus("Buffering...", "warning");
             this.pollForNextVideo();
             return;
         }
 
         const video = this.videoQueue.shift();
         this.clipsPlayed++;
+        this.videoElement.src = video.url;
 
         try {
-            // Load new video
-            this.videoElement.src = video.url;
-            
-            // Update status
-            this.updateStatus(
-                `▶️ Playing clip #${video.clipNumber} | ${video.latency}ms latency | ${this.videoQueue.length} buffered`, 
-                "success"
-            );
-
-            // Play the video
+            await this.waitUntilPlayable();
             await this.videoElement.play();
 
-            console.log(`▶️ Playing video clip #${video.clipNumber}`);
+            this.updateStatus(`▶️ Playing #${video.clipNumber} | Latency: ${video.latency}ms | Buffer: ${this.videoQueue.length}`, "success");
+            console.log(`▶️ Playing #${video.clipNumber}`);
 
-            // Clean up old URL after a delay
             setTimeout(() => {
                 URL.revokeObjectURL(video.url);
             }, 1000);
 
-            // Log performance stats periodically
             this.logPerformanceStats();
 
-        } catch (error) {
-            console.error(`❌ Failed to play video clip #${video.clipNumber}:`, error);
-            // Try next video
+        } catch (err) {
+            console.error(`❌ Playback failed for clip #${video.clipNumber}:`, err);
             this.playNextVideo();
         }
     }
 
     logPerformanceStats() {
-        if (this.clipsPlayed % 5 === 0 && this.clipsPlayed > 0) {
-            const avgLatency = this.latencyCount > 0 ? (this.latencySum / this.latencyCount).toFixed(1) : 0;
-            const bufferHealth = this.videoQueue.length;
-            
-            console.log(`📊 Viewer Performance: ${avgLatency}ms avg latency | ` +
-                       `${bufferHealth} clips buffered | ${this.clipsReceived} received | ${this.clipsPlayed} played`);
+        if (this.clipsPlayed % 5 === 0) {
+            const avg = this.latencyCount > 0 ? (this.latencySum / this.latencyCount).toFixed(1) : 0;
+            console.log(`📊 Avg Latency: ${avg}ms | Buffered: ${this.videoQueue.length} | Received: ${this.clipsReceived} | Played: ${this.clipsPlayed}`);
         }
     }
 
-    updateStatus(text, type = 'info') {
+    updateStatus(text, type = "info") {
         if (!this.statusElement) return;
         this.statusElement.className = `alert alert-${type}`;
         this.statusElement.textContent = text;
@@ -230,24 +185,13 @@ class HTTPVideoViewer {
 
     reset() {
         this.isPolling = false;
+        if (this.pollingTimer) clearInterval(this.pollingTimer);
 
-        if (this.pollingTimer) {
-            clearInterval(this.pollingTimer);
-            this.pollingTimer = null;
-        }
-
-        // Clean up video buffers
-        this.videoQueue.forEach(video => {
-            URL.revokeObjectURL(video.url);
-        });
+        this.videoQueue.forEach(v => URL.revokeObjectURL(v.url));
         this.videoQueue = [];
-        this.urlCache.clear();
-
-        // Stop video playback
         this.videoElement.pause();
         this.videoElement.src = '';
 
-        // Reset counters
         this.clipsReceived = 0;
         this.clipsPlayed = 0;
         this.latencySum = 0;
@@ -258,30 +202,23 @@ class HTTPVideoViewer {
         this.updateStatus("Disconnected", "secondary");
     }
 
-    // Adaptive polling based on queue health
     adjustPollingRate() {
         if (this.videoQueue.length < 1) {
-            // Buffer is low, poll faster
             this.pollingInterval = Math.max(2000, this.pollingInterval - 500);
         } else if (this.videoQueue.length >= this.bufferSize) {
-            // Buffer is full, poll slower
             this.pollingInterval = Math.min(8000, this.pollingInterval + 1000);
         }
-        
-        // Restart polling with new interval
+
         if (this.pollingTimer && this.isPolling) {
             clearInterval(this.pollingTimer);
             this.pollingTimer = setInterval(() => {
                 this.pollForNextVideo();
             }, this.pollingInterval);
-            
-            console.log(`⚡ Adjusted polling rate to ${this.pollingInterval}ms`);
+            console.log(`⚡ Adjusted polling to ${this.pollingInterval}ms`);
         }
     }
 
-    // Legacy compatibility method
-    adjustFrameRate(fps) {
-        // For HTTP polling, adjust polling interval instead
+    adjustFrameRate() {
         this.adjustPollingRate();
     }
 }

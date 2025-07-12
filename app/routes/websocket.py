@@ -27,7 +27,7 @@ processing_stats = {
 
 # Processed video queues for each camera (max 10 items)
 processed_video_queues: Dict[str, List[Dict[str, Any]]] = {}
-MAX_QUEUE_SIZE = 10
+MAX_QUEUE_SIZE = 3
 
 # Background worker management
 _background_worker_started = False
@@ -347,6 +347,7 @@ async def get_next_video(token: str, db: Session = Depends(get_db)):
     if not video_item:
         return {"video": None, "queue_size": 0}
     
+        
     # Return metadata without actual video data for polling
     return {
         "video": {
